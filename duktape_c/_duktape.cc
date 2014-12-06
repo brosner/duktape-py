@@ -5,6 +5,22 @@
 
 static PyObject* DuktapeError;
 
+#define PY_DUK_COPYPROP(prop) duk_get_prop_string(self->context,-1,#prop);\
+  PyDict_SetItemString(dict,#prop,PyString_FromString(duk_safe_to_string(self->context,-1)));\
+  duk_pop(self->context);
+
+#define PY_DUK_CATCH(call)  if (call){\
+  PyObject* dict=PyDict_New();\
+  PY_DUK_COPYPROP(name);\
+  PY_DUK_COPYPROP(message);\
+  PY_DUK_COPYPROP(file);\
+  PY_DUK_COPYPROP(line);\
+  PY_DUK_COPYPROP(stack);\
+  duk_pop(self->context);\
+  PyErr_SetObject(DuktapeError,dict);\
+  return 0;\
+}
+
 struct pyduk_context {
   PyObject_HEAD
   duk_context* context;
@@ -25,24 +41,32 @@ static PyObject* pyduk_ctx_New(PyTypeObject* type,PyObject* args, PyObject* kwds
 static PyObject* pdc_eval_file(pyduk_context* self,PyObject* arg){
   const char* path=PyString_AsString(arg);
   if (!path) return 0;
-  if (duk_peval_file(self->context,path)){
-    PyErr_SetString(DuktapeError,duk_safe_to_string(self->context,-1));
-    duk_pop(self->context);
-    return 0;
-  }
+  PY_DUK_CATCH(duk_peval_file(self->context,path))
   Py_RETURN_NONE;
 }
 static PyObject* pdc_eval_string(pyduk_context* self,PyObject* arg){
   // nextup: setjmp here
   const char* src=PyString_AsString(arg);
   if (!src) return 0; // did py set the error?
-  if (duk_peval_string(self->context,src)){
-    PyErr_SetString(DuktapeError,duk_safe_to_string(self->context,-1));
-    duk_pop(self->context); // pop the error
-    return 0;
-  }
+  PY_DUK_CATCH(duk_peval_string(self->context,src))
   Py_RETURN_NONE;
 }
+
+#define PY_DUK_COMPILE_ARGS 0
+static PyObject* pdc_compile_file(pyduk_context* self,PyObject* arg){
+  const char* path=PyString_AsString(arg);
+  if (!path) return 0;
+  PY_DUK_CATCH(duk_pcompile_file(self->context,PY_DUK_COMPILE_ARGS,path))
+  Py_RETURN_NONE;
+}
+static PyObject* pdc_compile_string(pyduk_context* self,PyObject* arg){
+  // nextup: setjmp here
+  const char* src=PyString_AsString(arg);
+  if (!src) return 0; // did py set the error?
+  PY_DUK_CATCH(duk_pcompile_string(self->context,PY_DUK_COMPILE_ARGS,src))
+  Py_RETURN_NONE;
+}
+
 static PyObject* pdc_stacklen(pyduk_context* self,PyObject* arg){
   return PyInt_FromSsize_t(duk_get_top(self->context));
 }
@@ -50,13 +74,15 @@ static PyObject* pdc_gettype(pyduk_context* self,PyObject* arg){
   unsigned int index=PyInt_AsSsize_t(arg); // todo: typecheck
   return PyInt_FromSsize_t(duk_get_type(self->context,index));
 }
-static PyObject* pdc_push(pyduk_context* self,PyObject* arg); // fwd dec
 static PyObject* pdc_getprop(pyduk_context* self,PyObject* arg){
   // int arg means index, string arg means key
   // this puts the result on the stack, it *doesn't* return it as a PyObject (because if it's a function you'll want to call it)
   if (PyInt_Check(arg)) duk_get_prop_index(self->context,-1,PyInt_AsLong(arg));
   else if (PyString_Check(arg)) duk_get_prop_string(self->context,-1,PyString_AsString(arg));
-  else return 0; // todo typeerror
+  else {
+    PyErr_SetString(PyExc_TypeError,"need int or string");
+    return 0;
+  }
   Py_RETURN_NONE;
 }
 static PyObject* pdc_push(pyduk_context* self,PyObject* arg){
@@ -86,7 +112,7 @@ static PyObject* pdc_push(pyduk_context* self,PyObject* arg){
     unsigned int object_index=duk_get_top_index(self->context);
     Py_ssize_t pos=0; PyObject* key,*val;
     while (PyDict_Next(arg,&pos,&key,&val)){
-      if (!PyString_Check(key)) return 0; // todo: real exception. todo: cast to JSON?
+      if (!PyString_Check(key)) return 0; // todo: consider cast to JSON with a flag
       // todo below: AsStringAndSize so these don't have to be null-term-able
       pdc_push(self,val);
       duk_put_prop_string(self->context,object_index,PyString_AsString(key));
@@ -96,7 +122,14 @@ static PyObject* pdc_push(pyduk_context* self,PyObject* arg){
     // hmm: how do I push an undefined, then?
     duk_push_null(self->context);
   }
-  else return 0; // todo raise a real exception
+  else {
+    PyErr_SetString(PyExc_TypeError,"non-coercible type");
+    return 0;
+  }
+  Py_RETURN_NONE;
+}
+static PyObject* pdc_push_undefined(pyduk_context* self,PyObject* _){
+  duk_push_undefined(self->context);
   Py_RETURN_NONE;
 }
 static PyObject* pdc_popn(pyduk_context* self,PyObject* arg){
@@ -153,11 +186,7 @@ static PyObject* pdc_callprop(pyduk_context* self,PyObject* args){
   pdc_push(self,method_name);
   unsigned int nargs=PyTuple_Size(jsargs);
   for (unsigned int i=0;i<nargs;++i) pdc_push(self,PyTuple_GetItem(jsargs,i));
-  if (duk_pcall_prop(self->context,old_top-1,nargs)){
-    PyErr_SetString(DuktapeError,duk_safe_to_string(self->context,-1));
-    duk_pop(self->context);
-    return 0;
-  }
+  PY_DUK_CATCH(duk_pcall_prop(self->context,old_top-1,nargs))
   Py_RETURN_NONE; // because the object may not be something we can coerce
 }
 static PyObject* pdc_getglobal(pyduk_context* self,PyObject* arg){
@@ -192,20 +221,21 @@ static PyObject* pdc_call(pyduk_context* self,PyObject* arg){
   }
   unsigned int nargs=PyTuple_Size(arg);
   for (unsigned int i=0;i<nargs;++i) pdc_push(self,PyTuple_GetItem(arg,i));
-  if (duk_pcall(self->context,nargs)){
-    PyErr_SetString(DuktapeError,duk_safe_to_string(self->context,-1));
-    duk_pop(self->context);
-    return 0;
-  }
+  PY_DUK_CATCH(duk_pcall(self->context,nargs))
   Py_RETURN_NONE;
 }
 
+// todo: py3.4 sig strings https://mail.python.org/pipermail/python-dev/2014-February/132213.html
+// todo: C wrapper for passing py funcs, and then classes, to JS -- useful for mocking
 static PyMethodDef pyduk_context_meths[]={
   {"eval_file", (PyCFunction)pdc_eval_file, METH_O, "eval_file(filename). leaves a return value on the top of the stack"},
   {"eval_string", (PyCFunction)pdc_eval_string, METH_O, "eval_string(js_source_str). leaves a return value on the top of the stack"},
+  {"compile_file", (PyCFunction)pdc_compile_file, METH_O, "compile_file(filename). leaves a return value on the top of the stack"},
+  {"compile_string", (PyCFunction)pdc_compile_string, METH_O, "compile_string(js_source_str). leaves a return value on the top of the stack"},
   {"stacklen", (PyCFunction)pdc_stacklen, METH_NOARGS, "stacklen(). calls duk_get_top, which is confusingly named. use result - 1 for anything wanting a stack index."},
   {"get_type", (PyCFunction)pdc_gettype, METH_O, "get_type(index). type of value at index (pass -1 for top). returns an integer which has duktape meaning"},
   {"push", (PyCFunction)pdc_push, METH_O, "push(pyobject). push python object to JS stack. TypeError if it's something we don't handle"},
+  {"push_undefined", (PyCFunction)pdc_push_undefined, METH_NOARGS, "push_undefined(). necessary because None gets coerced to null."},
   {"popn", (PyCFunction)pdc_popn, METH_O, "popn(nelts). pop N elts from the stack. doesn't return them, just removes them."},
   {"get", (PyCFunction)pdc_get, METH_NOARGS, "get(). get whatever's at the top of the stack. fail if stack empty or object is not coercible/wrappable."},
   {"get_prop", (PyCFunction)pdc_getprop, METH_O, "get_prop(key). key can be int (index lookup) or string (key lookup)."},

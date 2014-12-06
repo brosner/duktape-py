@@ -3,7 +3,9 @@ import duktape,pytest
 # todo: unicode tests everywhere and strings with nulls (i.e. I'm relying on null termination)
 
 TYPES={
-  2:type(None),
+  0:'missing', # this means invalid index
+  1:'undefined',
+  2:type(None), # null
   3:bool,
   4:float,
   5:str,
@@ -14,6 +16,7 @@ def test_create(): duktape.duk_context()
 def test_eval_file():
   c=duktape.duk_context()
   fname='test_eval_file.js'
+  # todo: use tempfile
   open(fname,'w').write('var a={a:1,b:2};')
   c.eval_file(fname)
   assert c.stacklen()==1
@@ -40,6 +43,8 @@ def test_push_gettype():
     return c.get_type(c.stacklen()-1)
   codes=map(push,['123',123,123.,True,False,None,(1,2,3),[1,2,3],[[1]],{'a':1,'b':'2'}]);
   assert map(TYPES.__getitem__,codes)==[str,float,float,bool,bool,type(None),object,object,object,object]
+  c.push_undefined()
+  assert TYPES[c.get_type(-1)]=='undefined'
 def test_push_get():
   c=duktape.duk_context()
   for v in ['123',123.,True,False,[1,2,3],[[1]],{'a':1,'b':2}]:
