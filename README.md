@@ -11,6 +11,9 @@ python wrapper for duktape, an embeddable javascript engine
 ... new C(1,2);""")
 >>> c.get()
 {'a': 1.0, 'b': 2.0}
+>>> c.call_prop('tot',())
+>>> c.get()
+3.0
 ```
 
 ```
