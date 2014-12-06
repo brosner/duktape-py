@@ -3,7 +3,7 @@ duktape-py
 python wrapper for duktape, an embeddable javascript engine
 
 # demo
-```
+```python
 >>> import duktape
 >>> c=duktape.duk_context()
 >>> c.eval_string("""function C(a,b){this.a=a; this.b=b};
@@ -16,14 +16,14 @@ python wrapper for duktape, an embeddable javascript engine
 3.0
 ```
 
-```
+```python
 >>> def pushget(x): c.push(x); return c.get()
 ... 
 >>> map(pushget,[1,2.,'three',[4,5],{'6':7},[[8]]])
 [1.0, 2.0, 'three', [4.0, 5.0], {'6': 7.0}, [[8.0]]]
 ```
 
-```
+```python
 >>> c.get_global("C")
 >>> c.construct((1,2))
 >>> c.get()
@@ -31,7 +31,7 @@ python wrapper for duktape, an embeddable javascript engine
 ```
 
 # installation
-```
+```bash
 git clone <whatever>
 cd duktape-py
 python -m setup install
