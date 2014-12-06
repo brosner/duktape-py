@@ -27,8 +27,11 @@ def test_error_handling():
   c=duktape.duk_context()
   # if error handling *isn't* working, this sends a SIGABRT
   with pytest.raises(duktape.DuktapeError): c.eval_string('bad syntax bad bad bad')
+def test_gc():
+  c=duktape.duk_context()
+  c.push('whatever')
+  c.gc() # I don't know how to test memory usage without a lot of work. so this just exercises it.
 
-# SECTION: core types, push and pop
 def test_push_gettype():
   "test push and gettype"
   c=duktape.duk_context()
@@ -55,7 +58,7 @@ def test_getprop():
   assert c.get()==1.
   c.popn(1)
   assert c.get()=={'a':1.,'b':1.}
-def test_call():
+def test_call_prop():
   c=duktape.duk_context()
   c.eval_string(CLASSINSTANCE)
   c.call_prop('tot',())
@@ -72,3 +75,9 @@ def test_construct():
   c.get_global('C')
   c.construct((1,2))
   assert c.get()=={'a':1,'b':2}
+def test_call():
+  c=duktape.duk_context()
+  c.eval_string('(function(a,b){return a+b;})')
+  c.call((1,2))
+  print c.get()
+  assert c.get()==3.

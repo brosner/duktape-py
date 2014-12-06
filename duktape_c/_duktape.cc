@@ -137,17 +137,20 @@ static PyObject* pdc_get(pyduk_context* self,PyObject* _){
     }
     return dict;
   }
-  else return 0; // set 'unknown primitive' exception, maybe preview it
+  else {
+    PyErr_SetString(PyExc_TypeError,"non-coercible type");
+    return 0;
+  }
 }
 static PyObject* pdc_callprop(pyduk_context* self,PyObject* args){
-  char* method_name; int name_len; PyObject* jsargs;
-  if (!PyArg_ParseTuple(args,"s#O",&method_name,&name_len,&jsargs)) return 0;
-  if (!PyTuple_Check(jsargs)){
-    PyErr_SetString(PyExc_TypeError,"args must be tuple");
-    return 0; // todo: set exception
+  PyObject* method_name, *jsargs;
+  if (!PyArg_ParseTuple(args,"OO",&method_name,&jsargs)) return 0;
+  if (!PyString_Check(method_name)||!PyTuple_Check(jsargs)){
+    PyErr_SetString(PyExc_TypeError,"expected string, tuple");
+    return 0;
   }
   int old_top=duk_get_top(self->context);
-  duk_push_lstring(self->context,method_name,name_len);
+  pdc_push(self,method_name);
   unsigned int nargs=PyTuple_Size(jsargs);
   for (unsigned int i=0;i<nargs;++i) pdc_push(self,PyTuple_GetItem(jsargs,i));
   if (duk_pcall_prop(self->context,old_top-1,nargs)){
@@ -163,6 +166,12 @@ static PyObject* pdc_getglobal(pyduk_context* self,PyObject* arg){
   duk_get_global_string(self->context,name);
   Py_RETURN_NONE;
 }
+static PyObject* pdc_setglobal(pyduk_context* self,PyObject* arg){
+  char* name=PyString_AsString(arg);
+  if (!name) return 0;
+  duk_put_global_string(self->context,name);
+  Py_RETURN_NONE;
+}
 static PyObject* pdc_construct(pyduk_context* self,PyObject* arg){
   if (!PyTuple_Check(arg)) return 0;
   unsigned int nargs=PyTuple_Size(arg);
@@ -171,19 +180,41 @@ static PyObject* pdc_construct(pyduk_context* self,PyObject* arg){
   duk_new(self->context,nargs);
   Py_RETURN_NONE;
 }
+static PyObject* pdc_gc(pyduk_context* self,PyObject* _){
+  duk_gc(self->context,0);
+  Py_RETURN_NONE;
+}
+static PyObject* pdc_call(pyduk_context* self,PyObject* arg){
+  if (!PyTuple_Check(arg)) return 0;
+  if (!duk_is_callable(self->context,-1)){
+    PyErr_SetString(PyExc_TypeError,"stack top not callable");
+    return 0;
+  }
+  unsigned int nargs=PyTuple_Size(arg);
+  for (unsigned int i=0;i<nargs;++i) pdc_push(self,PyTuple_GetItem(arg,i));
+  if (duk_pcall(self->context,nargs)){
+    PyErr_SetString(DuktapeError,duk_safe_to_string(self->context,-1));
+    duk_pop(self->context);
+    return 0;
+  }
+  Py_RETURN_NONE;
+}
 
 static PyMethodDef pyduk_context_meths[]={
-  {"eval_file", (PyCFunction)pdc_eval_file, METH_O, "leaves a return value on the top of the stack"},
-  {"eval_string", (PyCFunction)pdc_eval_string, METH_O, "leaves a return value on the top of the stack"},
-  {"stacklen", (PyCFunction)pdc_stacklen, METH_NOARGS, "calls duk_get_top, which is confusingly named. use result - 1 for anything wanting a stack index."},
-  {"get_type", (PyCFunction)pdc_gettype, METH_O, "get_type(-1). type of value at index (pass -1 for top). returns an integer which has duktape meaning"},
-  {"push", (PyCFunction)pdc_push, METH_O, "push python object to JS stack. TypeError if it's something we don't handle"},
-  {"popn", (PyCFunction)pdc_popn, METH_O, "pop N elts from the stack. doesn't return them, just removes them."},
-  {"get", (PyCFunction)pdc_get, METH_NOARGS, "get whatever's at the top of the stack. fail if stack empty or object is not coercible/wrappable."},
-  {"get_prop", (PyCFunction)pdc_getprop, METH_O, "if int, push array index of stack top object. if string, object key."},
+  {"eval_file", (PyCFunction)pdc_eval_file, METH_O, "eval_file(filename). leaves a return value on the top of the stack"},
+  {"eval_string", (PyCFunction)pdc_eval_string, METH_O, "eval_string(js_source_str). leaves a return value on the top of the stack"},
+  {"stacklen", (PyCFunction)pdc_stacklen, METH_NOARGS, "stacklen(). calls duk_get_top, which is confusingly named. use result - 1 for anything wanting a stack index."},
+  {"get_type", (PyCFunction)pdc_gettype, METH_O, "get_type(index). type of value at index (pass -1 for top). returns an integer which has duktape meaning"},
+  {"push", (PyCFunction)pdc_push, METH_O, "push(pyobject). push python object to JS stack. TypeError if it's something we don't handle"},
+  {"popn", (PyCFunction)pdc_popn, METH_O, "popn(nelts). pop N elts from the stack. doesn't return them, just removes them."},
+  {"get", (PyCFunction)pdc_get, METH_NOARGS, "get(). get whatever's at the top of the stack. fail if stack empty or object is not coercible/wrappable."},
+  {"get_prop", (PyCFunction)pdc_getprop, METH_O, "get_prop(key). key can be int (index lookup) or string (key lookup)."},
   {"call_prop", (PyCFunction)pdc_callprop, METH_VARARGS, "call_prop(function_name,args). args must be a tuple. can be empty."},
-  {"get_global", (PyCFunction)pdc_getglobal, METH_O, "look something global up by name"},
+  {"get_global", (PyCFunction)pdc_getglobal, METH_O, "get_global(name). look something global up by name"},
+  {"set_global", (PyCFunction)pdc_setglobal, METH_O, "set_global(name). set name globally to the thing at the top of the stack."},
   {"construct", (PyCFunction)pdc_construct, METH_O, "construct(args). args is a tuple. the type you're making should be stack-top."},
+  {"gc", (PyCFunction)pdc_gc, METH_NOARGS, "gc(). run garbage collector"},
+  {"call", (PyCFunction)pdc_call, METH_O, "call(args_tuple). see also call_prop."},
   {0}
 };
 
