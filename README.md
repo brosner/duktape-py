@@ -30,6 +30,16 @@ python wrapper for duktape, an embeddable javascript engine
 {'a': 1.0, 'b': 2.0}
 ```
 
+but tread lightly:
+
+```python
+>>> c.push('not_a_function')
+>>> c.construct((1,2))
+FATAL 56: uncaught error
+PANIC 56: uncaught error (calling abort)
+Abort trap: 6
+```
+
 # installation
 ```bash
 git clone <whatever>
