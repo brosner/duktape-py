@@ -85,6 +85,11 @@ static PyObject* pdc_getprop(pyduk_context* self,PyObject* arg){
   }
   Py_RETURN_NONE;
 }
+static PyObject* pdc_setprop(pyduk_context* self,PyObject* arg){
+  if (!PyString_Check(arg)) return 0;
+  duk_put_prop_string(self->context,-2,PyString_AsString(arg));
+  Py_RETURN_NONE;
+}
 static PyObject* pdc_push(pyduk_context* self,PyObject* arg){
   if (PyString_Check(arg)){
     char* buf; Py_ssize_t len;
@@ -287,10 +292,11 @@ static PyMethodDef pyduk_context_meths[]={
   {"get_type", (PyCFunction)pdc_gettype, METH_O, "get_type(index). type of value at index (pass -1 for top). returns an integer which has duktape meaning"},
   {"push", (PyCFunction)pdc_push, METH_O, "push(pyobject). push python object to JS stack. TypeError if it's something we don't handle"},
   {"push_undefined", (PyCFunction)pdc_push_undefined, METH_NOARGS, "push_undefined(). necessary because None gets coerced to null."},
-  {"push_func", (PyCFunction)pdc_push_func, METH_VARARGS, "push_func(cfuncptr,nargs). nargs -1 for varargs. WARNING this leaks memory."},
+  {"push_func", (PyCFunction)pdc_push_func, METH_VARARGS, "push_func(callable,nargs). nargs -1 for varargs. WARNING this leaks memory."},
   {"popn", (PyCFunction)pdc_popn, METH_O, "popn(nelts). pop N elts from the stack. doesn't return them, just removes them."},
   {"get", (PyCFunction)pdc_get, METH_NOARGS, "get(). get whatever's at the top of the stack. fail if stack empty or object is not coercible/wrappable."},
   {"get_prop", (PyCFunction)pdc_getprop, METH_O, "get_prop(key). key can be int (index lookup) or string (key lookup)."},
+  {"set_prop", (PyCFunction)pdc_setprop, METH_O, "set_prop(key). sets obj[key]=thing if the end of the duktape stack is [obj,thing]."},
   {"call_prop", (PyCFunction)pdc_callprop, METH_VARARGS, "call_prop(function_name,args). args must be a tuple. can be empty."},
   {"get_global", (PyCFunction)pdc_getglobal, METH_O, "get_global(name). look something global up by name"},
   {"set_global", (PyCFunction)pdc_setglobal, METH_O, "set_global(name). set name globally to the thing at the top of the stack."},

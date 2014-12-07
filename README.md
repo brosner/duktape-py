@@ -30,7 +30,20 @@ python wrapper for duktape, an embeddable javascript engine
 {'a': 1.0, 'b': 2.0}
 ```
 
-but tread lightly:
+you can make python functions callable from javascript (though it leaks memory and you can't bind a 'this'):
+
+```python
+>>> def add(a,b): return a+b
+... 
+>>> c.push({})
+>>> c.push_func(add,2)
+>>> c.set_prop('add')
+>>> c.call_prop('add',(1,2))
+>>> c.get()
+3.0
+```
+
+also, tread lightly:
 
 ```python
 >>> c.push('not_a_function')

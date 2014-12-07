@@ -63,6 +63,12 @@ def test_getprop():
   assert c.get()==1.
   c.popn(1)
   assert c.get()=={'a':1.,'b':1.}
+def test_setprop():
+  c=duktape.duk_context()
+  c.push({})
+  c.push(1)
+  c.set_prop('k')
+  assert c.get()=={'k':1.}
 def test_call_prop():
   c=duktape.duk_context()
   c.eval_string(CLASSINSTANCE)
@@ -107,10 +113,11 @@ def test_push_func():
   c.call((1,2,3))
   assert [2.,3.]==c.get()
 
-@pytest.mark.xfail
 def test_mockattr():
   c=duktape.duk_context()
   c.push({})
   def fake_member(a,b): return a+b
   c.push_func(fake_member,2)
-  raise NotImplementedError
+  c.set_prop('add')
+  c.call_prop('add',(1,2))
+  assert 3.==c.get()
