@@ -1,4 +1,4 @@
-import duktape,pytest
+import duktape,pytest,ctypes
 
 # todo: unicode tests everywhere and strings with nulls (i.e. I'm relying on null termination)
 
@@ -86,3 +86,31 @@ def test_call():
   c.call((1,2))
   print c.get()
   assert c.get()==3.
+
+def test_push_func():
+  # https://docs.python.org/2/library/ctypes.html#callback-functions
+  # -1 is DUK_VARARGS
+  # typedef duk_ret_t (*duk_safe_call_function) (duk_context *ctx);
+  # and duk_ret_t is just an int, here: http://duktape.org/guide.html#ctypes.2
+  # this has info about return values: http://duktape.org/api.html#duk_push_c_function
+  def zero(): return 'ok'
+  def onearg(arg): return arg+1
+  def varargs(*args): return args[1:]
+  c=duktape.duk_context()
+  c.push_func(zero,0)
+  c.call(())
+  assert 'ok'==c.get()
+  c.push_func(onearg,1)
+  c.call((1,))
+  assert 2==c.get()
+  c.push_func(varargs,-1)
+  c.call((1,2,3))
+  assert [2.,3.]==c.get()
+
+@pytest.mark.xfail
+def test_mockattr():
+  c=duktape.duk_context()
+  c.push({})
+  def fake_member(a,b): return a+b
+  c.push_func(fake_member,2)
+  raise NotImplementedError
