@@ -35,10 +35,8 @@ you can make python functions callable from javascript (though it leaks memory a
 ```python
 >>> def add(a,b): return a+b
 ... 
->>> c.push({})
 >>> c.push_func(add,2)
->>> c.set_prop('add')
->>> c.call_prop('add',(1,2))
+>>> c.call((1,2))
 >>> c.get()
 3.0
 ```
