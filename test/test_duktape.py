@@ -1,9 +1,9 @@
-import duktape,pytest,ctypes
+import duktape,pytest,tempfile
 
 # todo: unicode tests everywhere and strings with nulls (i.e. I'm relying on null termination)
 
 TYPES={
-  0:'missing', # this means invalid index
+  0:'missing', # this means invalid stack index
   1:'undefined',
   2:type(None), # null
   3:bool,
@@ -15,10 +15,10 @@ TYPES={
 def test_create(): duktape.duk_context()
 def test_eval_file():
   c=duktape.duk_context()
-  fname='test_eval_file.js'
-  # todo: use tempfile
-  open(fname,'w').write('var a={a:1,b:2};')
-  c.eval_file(fname)
+  with tempfile.NamedTemporaryFile() as tf:
+    tf.write('var a={a:1,b:2};')
+    tf.flush()
+    c.eval_file(tf.name)
   assert c.stacklen()==1
 def test_stacklen_evalstring():
   "test stacklen and evalstring"
@@ -94,7 +94,6 @@ def test_call():
   assert c.get()==3.
 
 def test_push_func():
-  # https://docs.python.org/2/library/ctypes.html#callback-functions
   # -1 is DUK_VARARGS
   # typedef duk_ret_t (*duk_safe_call_function) (duk_context *ctx);
   # and duk_ret_t is just an int, here: http://duktape.org/guide.html#ctypes.2
@@ -122,3 +121,4 @@ def test_mockattr():
   c.call_prop('add',(1,2))
   assert 3.==c.get()
   c.popn(1)
+
