@@ -121,3 +121,4 @@ def test_mockattr():
   c.set_prop('add')
   c.call_prop('add',(1,2))
   assert 3.==c.get()
+  c.popn(1)

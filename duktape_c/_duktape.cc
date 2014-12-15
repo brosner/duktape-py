@@ -280,6 +280,9 @@ static PyObject* pdc_call(pyduk_context* self,PyObject* arg){
   PY_DUK_CATCH(duk_pcall(self->context,nargs))
   Py_RETURN_NONE;
 }
+static PyObject* pdc_tostring(pyduk_context* self,PyObject* _){
+  return PyString_FromString(duk_safe_to_string(self->context,-1));
+}
 
 // todo: py3.4 sig strings https://mail.python.org/pipermail/python-dev/2014-February/132213.html
 // todo: C wrapper for passing py funcs, and then classes, to JS -- useful for mocking
@@ -303,6 +306,7 @@ static PyMethodDef pyduk_context_meths[]={
   {"construct", (PyCFunction)pdc_construct, METH_O, "construct(args). args is a tuple. the type you're making should be stack-top."},
   {"gc", (PyCFunction)pdc_gc, METH_NOARGS, "gc(). run garbage collector"},
   {"call", (PyCFunction)pdc_call, METH_O, "call(args_tuple). see also call_prop."},
+  {"tostring", (PyCFunction)pdc_tostring, METH_NOARGS, "tostring(). return a string representation of the stack top object."},
   {0}
 };
 

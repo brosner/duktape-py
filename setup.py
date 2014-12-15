@@ -13,5 +13,9 @@ setup(
   version='0.0.0',
   description='python wrapper for duktape C library',
   ext_modules=[duk_c]
+  author='Abe Winter',
+  author_email='abe-winter@users.noreply.github.com',
+  url='https://github.com/abe-winter/duktape-py/tarball/0.0.0',
+  keywords=['javascript','duktape'],
 )
 
