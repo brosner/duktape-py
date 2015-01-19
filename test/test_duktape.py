@@ -1,4 +1,4 @@
-import duktape,pytest,tempfile
+import duktape,pytest,tempfile,gc
 
 # todo: unicode tests everywhere and strings with nulls (i.e. I'm relying on null termination)
 
@@ -122,6 +122,18 @@ def test_push_func():
   c.push_func(varargs,-1)
   c.call(1,2,3)
   assert [2.,3.]==c.get()
+
+def test_push_func_nodestroy():
+  "make sure a pushed func doesn't get decrefd out of existence"
+  # I don't understand GC well enough to know if this is ensuring anything
+  c=duktape.DukContext()
+  c.push_func(lambda:'ok',0)
+  c.set_global('F')
+  for i in range(4):
+    c.get_global('F')
+    c.call()
+    assert 'ok'==c.get()
+    gc.collect()
 
 def test_mockattr():
   c=duktape.DukContext()
