@@ -1,6 +1,7 @@
 duktape-py
 ==========
 python wrapper for duktape, an embeddable javascript engine
+(warning: everything below is stale)
 
 # demo
 ```python

@@ -101,13 +101,13 @@ def test_push_func():
   def varargs(*args): return args[1:]
   c=duktape.DukContext()
   c.push_func(zero,0)
-  c.call(())
+  c.call()
   assert 'ok'==c.get()
   c.push_func(onearg,1)
-  c.call((1,))
+  c.call(1)
   assert 2==c.get()
   c.push_func(varargs,-1)
-  c.call((1,2,3))
+  c.call(1,2,3)
   assert [2.,3.]==c.get()
 
 def test_mockattr():
@@ -118,5 +118,4 @@ def test_mockattr():
   c.set_prop('add')
   c.call_prop('add',(1,2))
   assert 3.==c.get()
-  c.popn(1)
-
+  c.pop()

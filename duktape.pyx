@@ -1,6 +1,7 @@
 "wrapper module for duktape"
 
 cimport cduk
+cimport cpython
 
 class DuktapeError(StandardError):
   def __init__(self, name, message, file, line, stack):
@@ -48,6 +49,99 @@ cdef class DukWrappedObject:
 
 cdef unsigned int PY_DUK_COMPILE_ARGS = 0
 
+cdef get_list(cduk.duk_context* ctx, index=-1):
+    "helper for get_helper()"
+    a = []
+    for i in range(cduk.duk_get_length(ctx, index)):
+      cduk.duk_get_prop_index(ctx, index, i) # this puts the elt on the stack
+      try: a.append(get_helper(ctx, -1))
+      finally: cduk.duk_pop(ctx)
+    return a
+cdef get_dict(cduk.duk_context* ctx, index=-1):
+  "helper for get_helper()"
+  d = {}
+  cduk.duk_enum(ctx, index, cduk.DUK_ENUM_OWN_PROPERTIES_ONLY)
+  while cduk.duk_next(ctx, index, True): # this pushes k & v onto the stack
+    try: d[get_helper(ctx, -2)]=get_helper(ctx, -1)
+    finally: cduk.duk_pop_n(ctx, 2)
+  return d
+cdef get_string(cduk.duk_context* ctx, index=-1):
+  "helper for get_helper()"
+  cdef cduk.duk_size_t strlen
+  cdef const char* buf = cduk.duk_get_lstring(ctx, index, &strlen)
+  return buf[:strlen] # docs claim this allows nulls http://docs.cython.org/src/tutorial/strings.html#passing-byte-strings
+cdef get_helper(cduk.duk_context* ctx, index=-1):
+  if cduk.duk_is_boolean(ctx, index): return bool(cduk.duk_get_boolean(ctx, index))
+  elif cduk.duk_is_nan(ctx, index): return float('nan')
+  elif cduk.duk_is_null_or_undefined(ctx, index): return None # todo: see DukNull etc above
+  elif cduk.duk_is_number(ctx, index): return cduk.duk_get_number(ctx, index) # todo: is there an internal int value? if yes test for that
+  elif cduk.duk_is_string(ctx, index): return get_string(ctx, index)
+  elif cduk.duk_is_array(ctx, index): return get_list(ctx, index)
+  elif cduk.duk_is_object(ctx, index): return get_dict(ctx, index) # note: I think this ends up being a catch-all. yuck.
+  else: raise TypeError('not_coercible',DukType(cduk.duk_get_type(ctx,index))) # todo: return a wrapper instead. also, this never triggers because of the is_object test above
+
+cdef push_dict(cduk.duk_context* ctx, d):
+  "helper for push"
+  cduk.duk_push_object(ctx)
+  try:
+    for k,v in d.items():
+      if not isinstance(k,str): raise TypeError('k_not_str', type(k))
+      push_helper(ctx,v)
+      cduk.duk_put_prop_string(ctx, -2, k)
+  except TypeError:
+    cduk.duk_pop(ctx)
+    raise
+cdef push_array(cduk.duk_context* ctx, a):
+  "helper for push"
+  cduk.duk_push_array(ctx)
+  try:
+    for i,x in enumerate(a):
+      push_helper(ctx,x)
+      cduk.duk_put_prop_index(ctx, -2, i)
+  except TypeError:
+    cduk.duk_pop(ctx) # cleanup
+    raise
+cdef push_helper(cduk.duk_context* ctx, item):
+  if isinstance(item, str): cduk.duk_push_lstring(ctx, item, len(item))
+  elif isinstance(item, unicode): raise NotImplementedError('todo: unicode')
+  elif isinstance(item, bool):
+    if item: cduk.duk_push_true(ctx)
+    else: cduk.duk_push_false(ctx)
+  elif isinstance(item, (int, float)): cduk.duk_push_number(ctx, <double>item) # todo: separate ints
+  elif isinstance(item, (list, tuple)): push_array(ctx, item)
+  elif isinstance(item, dict): push_dict(ctx, item)
+  elif item is None: cduk.duk_push_null(ctx)
+  else: raise TypeError('cant_coerce_type', type(item))
+
+cdef const char* PYDUK_FP="__duktape_cfunc_pointer__"
+cdef const char* PYDUK_NARGS="__duktape_cfunc_nargs__"
+cdef cduk.duk_ret_t callback_wrapper(cduk.duk_context* ctx):
+  "this is used in push_func"
+  # note: this is nogil because otherwise RefNanny returns None in a preamable; compiler error.
+  cduk.duk_push_current_function(ctx)
+  # warning: this section dangerously assumes that the props haven't been modified
+  cduk.duk_get_prop_string(ctx, -1, PYDUK_FP)
+  cdef object func = <object>cduk.duk_get_pointer(ctx, -1)
+  cpython.Py_INCREF(func) # warning: this never gets cleaned. does duktape have a global transformation callback that can be hooked?
+  if not callable(<object>func): return cduk.DUK_RET_TYPE_ERROR
+  cduk.duk_pop(ctx) # pop the pointer
+  cduk.duk_get_prop_string(ctx, -1, PYDUK_NARGS)
+  nargs = cduk.duk_get_int(ctx, -1)
+  cduk.duk_pop_n(ctx, 2) # pop nargs and current_function
+  if nargs == cduk.DUK_VARARGS: nargs = cduk.duk_get_top(ctx) # this works because the function is called inside its own stack
+  elif nargs < 0: return cduk.DUK_RET_RANGE_ERROR # DukContext.push_func protects from this unless someone was tinkering
+  cdef tuple args_tuple = cpython.PyTuple_New(nargs)
+  cdef object item
+  for i in range(nargs):
+    item = get_helper(ctx, i)
+    cpython.Py_INCREF(item) # wacky stuff happens without this line given multiple args; assuming that tuple-set inherits a reference
+    if not item: return cduk.DUK_RET_TYPE_ERROR
+    cpython.PyTuple_SetItem(args_tuple, i, item)
+  cdef object retval = cpython.PyObject_Call(<object>func, args_tuple, <object>NULL)
+  cpython.Py_DECREF(args_tuple) # todo: learn how reference-counting actually works and review this
+  push_helper(ctx, retval)
+  return 1 # todo: DUK_EXEC_SUCCESS=0. is this DUK_EXEC_ERROR? or the number of args returned, maybe. link to docs.
+
 cdef class DukContext:
   cdef cduk.duk_context* ctx
   def __cinit__(self): self.ctx = cduk.duk_create_heap_default()
@@ -61,36 +155,7 @@ cdef class DukContext:
     return cduk.duk_get_top(self.ctx)
   def get_type(self, index=-1):
     return DukType(cduk.duk_get_type(self.ctx, index))
-  def get_list(self, index=-1):
-    "helper for get()"
-    a = []
-    for i in range(cduk.duk_get_length(self.ctx, index)):
-      cduk.duk_get_prop_index(self.ctx, index, i) # this puts the elt on the stack
-      try: a.append(self.get(-1))
-      finally: self.pop()
-    return a
-  def get_dict(self, index=-1):
-    "helper for get()"
-    d = {}
-    cduk.duk_enum(self.ctx, index, cduk.DUK_ENUM_OWN_PROPERTIES_ONLY)
-    while cduk.duk_next(self.ctx, index, True): # this pushes k & v onto the stack
-      try: d[self.get(-2)]=self.get(-1)
-      finally: self.pop(2)
-    return d
-  def get_string(self, index=-1):
-    "helper"
-    cdef cduk.duk_size_t strlen
-    cdef const char* buf = cduk.duk_get_lstring(self.ctx, index, &strlen)
-    return buf[:strlen] # docs claim this allows nulls http://docs.cython.org/src/tutorial/strings.html#passing-byte-strings
-  def get(self, index=-1):
-    if cduk.duk_is_boolean(self.ctx, index): return bool(cduk.duk_get_boolean(self.ctx, index))
-    elif cduk.duk_is_nan(self.ctx, index): return float('nan')
-    elif cduk.duk_is_null_or_undefined(self.ctx, index): return None # todo: see DukNull etc above
-    elif cduk.duk_is_number(self.ctx, index): return cduk.duk_get_number(self.ctx, index) # todo: is there an internal int value? if yes test for that
-    elif cduk.duk_is_string(self.ctx, index): return self.get_string(index)
-    elif cduk.duk_is_array(self.ctx, index): return self.get_list(index)
-    elif cduk.duk_is_object(self.ctx, index): return self.get_dict(index) # note: I think this ends up being a catch-all. yuck.
-    else: raise TypeError('not_coercible',DukType(cduk.duk_get_type(self.ctx,index))) # todo: return a wrapper instead. also, this never triggers because of the is_object test above
+  def get(self, index=-1): return get_helper(self.ctx, index)
   def call(self, *args):
     if not cduk.duk_is_callable(self.ctx, -1): raise TypeError("stack_top:not_callable")
     top = len(self)
@@ -136,40 +201,18 @@ cdef class DukContext:
   def compile_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, js))
 
   # push/pop
-  def push_dict(self, d):
-    "helper for push"
-    cduk.duk_push_object(self.ctx)
-    try:
-      for k,v in d.items():
-        if not isinstance(k,str): raise TypeError('k_not_str', type(k))
-        self.push(v)
-        cduk.duk_put_prop_string(self.ctx, -2, k)
-    except TypeError:
-      self.pop() # i.e. cleanup
-      raise
-  def push_array(self, a):
-    "helper for push"
-    cduk.duk_push_array(self.ctx)
-    try:
-      for i,x in enumerate(a):
-        self.push(x)
-        cduk.duk_put_prop_index(self.ctx, -2, i)
-    except TypeError:
-      self.pop() # i.e. don't leave stack dirty in error case
-      raise
-  def push(self, item):
-    if isinstance(item, str): cduk.duk_push_lstring(self.ctx, item, len(item))
-    elif isinstance(item, unicode): raise NotImplementedError('todo: unicode')
-    elif isinstance(item, bool):
-      if item: cduk.duk_push_true(self.ctx)
-      else: cduk.duk_push_false(self.ctx)
-    elif isinstance(item, (int, float)): cduk.duk_push_number(self.ctx, <double>item) # todo: separate ints
-    elif isinstance(item, (list, tuple)): self.push_array(item)
-    elif isinstance(item, dict): self.push_dict(item)
-    elif item is None: cduk.duk_push_null(self.ctx)
-    else: raise TypeError('cant_coerce_type', type(item))
+  def push(self, item): push_helper(self.ctx, item)
   def push_undefined(self): cduk.duk_push_undefined(self.ctx)
-  def push_func(self, f, nargs): raise NotImplementedError
+  def push_func(self, f, nargs):
+    if not callable(f): raise TypeError
+    if not isinstance(nargs,int): raise TypeError
+    if nargs<0 and nargs!=-1: raise ValueError('-1 is varargs, no other negatives allowed')
+    cpython.Py_INCREF(f) # warning: this is a memory leak. look in duktape docs for gc triggers
+    cduk.duk_push_c_function(self.ctx, callback_wrapper, nargs)
+    cduk.duk_push_pointer(self.ctx, <void*>f)
+    cduk.duk_put_prop_string(self.ctx, -2, PYDUK_FP)
+    self.push(nargs)
+    cduk.duk_put_prop_string(self.ctx, -2, PYDUK_NARGS)
   def pop(self, n=1): cduk.duk_pop_n(self.ctx, n)
 
   # globals

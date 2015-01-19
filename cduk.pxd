@@ -16,6 +16,10 @@ cdef extern from "duktape_c/duktape.h":
 
   # macro values
   unsigned int DUK_ENUM_OWN_PROPERTIES_ONLY
+  unsigned int DUK_RET_TYPE_ERROR
+  unsigned int DUK_RET_RANGE_ERROR
+  unsigned int DUK_RET_ERROR
+  unsigned int DUK_VARARGS
 
   duk_context* duk_create_heap_default() # macro
   void duk_destroy_heap(duk_context* ctx)
@@ -84,6 +88,9 @@ cdef extern from "duktape_c/duktape.h":
   void duk_push_int(duk_context *ctx, duk_int_t val)
   void duk_push_uint(duk_context *ctx, duk_uint_t val)
   const char *duk_push_lstring(duk_context *ctx, const char *str, duk_size_t len)
+  duk_idx_t duk_push_c_function(duk_context *ctx, duk_c_function func, duk_idx_t nargs)
+  void duk_push_pointer(duk_context *ctx, void *p)
+  void duk_push_current_function(duk_context *ctx)
   
   duk_bool_t duk_put_prop_string(duk_context *ctx, duk_idx_t obj_index, const char *key)
   duk_bool_t duk_put_prop_index(duk_context *ctx, duk_idx_t obj_index, duk_uarridx_t arr_index)
