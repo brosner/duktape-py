@@ -1,12 +1,11 @@
 duktape-py
 ==========
 python wrapper for duktape, an embeddable javascript engine
-(warning: everything below is stale)
 
 # demo
 ```python
 >>> import duktape
->>> c=duktape.duk_context()
+>>> c=duktape.DukContext()
 >>> c.eval_string("""function C(a,b){this.a=a; this.b=b};
 ... C.prototype.tot=function(){return this.a+this.b};
 ... new C(1,2);""")
@@ -26,7 +25,7 @@ python wrapper for duktape, an embeddable javascript engine
 
 ```python
 >>> c.get_global("C")
->>> c.construct((1,2))
+>>> c.construct(1,2)
 >>> c.get()
 {'a': 1.0, 'b': 2.0}
 ```
@@ -37,28 +36,16 @@ you can make python functions callable from javascript (though it leaks memory a
 >>> def add(a,b): return a+b
 ... 
 >>> c.push_func(add,2)
->>> c.call((1,2))
+>>> c.call(1,2)
 >>> c.get()
 3.0
 ```
 
-also, tread lightly:
-
-```python
->>> c.push('not_a_function')
->>> c.construct((1,2))
-FATAL 56: uncaught error
-PANIC 56: uncaught error (calling abort)
-Abort trap: 6
-```
+Tread lightly: not all errors are caught. In particular, errors in a constructor function aren't handled.
 
 # installation
 ```bash
-git clone <whatever>
-cd duktape-py
-python -m setup install
-# that's it
-# we're not in pypi yet
+pip install duktape
 ```
 
 # why?
@@ -67,7 +54,7 @@ python -m setup install
 
 # warnings
 * use this for testing only
-* note the version (0.0.0)
+* note the version (0.0.2). this is not mature.
 * don't run in production unless you like `SIGABRT` 
 * this isn't full-featured; most of duktape *isn't* exposed 
 * this is *almost* as low-level as duktape so you'll have to interact with the stack
