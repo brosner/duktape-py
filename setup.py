@@ -15,7 +15,7 @@ if sys.version_info[0]!=2:
 
 setup(
   name='duktape',
-  version='0.0.2',
+  version='0.0.3',
   description='python wrapper for duktape, an embeddable javascript library',
   ext_modules=cythonize([duk_c]),
   author='Abe Winter',
