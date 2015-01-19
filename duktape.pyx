@@ -7,14 +7,14 @@ class DuktapeError(StandardError):
     self.name, self.message, self.file, self.line, self.stack = name, message, file, line, stack
   def __repr__(self): return '<Duktape:%s %s:%s "%s">'%(self.name, self.file, self.line, self.message)
 
-cdef getprop(duk_context* ctx, str prop):
+cdef getprop(cduk.duk_context* ctx, str prop):
   "get property from stack-top object, return as python string, leave stack clean"
   cduk.duk_get_prop_string(ctx, -1, prop)
-  cdef str res = cduk.duk_safe_to_string(ctx, -1)
+  cdef const char* res = cduk.duk_safe_to_string(ctx, -1)
   cduk.duk_pop(ctx)
   return res
 
-cdef duk_reraise(duk_context* ctx, int res):
+cdef duk_reraise(cduk.duk_context* ctx, int res):
   "for duktape meths that return nonzero to indicate trouble, convert the error object to python and raise it"
   if res:
     err = DuktapeError(*[getprop(ctx, prop) for prop in ('name','message','file','line','stack')])
@@ -27,6 +27,11 @@ class DukType:
   def name(self): raise NotImplementedError
   @classmethod
   def fromname(clas, name): raise NotImplementedError
+  def __repr__(self): return '<DukType %i>'%self.type_int # todo: include self.name() (in an error-safe way)
+
+# todo: think about using these (but make sure they evaluate to false)
+class DukNull: "not used yet"
+class DukUndefined: "not used yet"
 
 cdef class DukWrappedObject:
   pass # todo: use this to wrap things that we don't know how to convert to a python object
@@ -35,66 +40,101 @@ cdef unsigned int PY_DUK_COMPILE_ARGS
 
 cdef class DukStack:
   "functions that manipulate the JS stack"
+  cdef DukContext d_c
   def __init__(self, d_c): self.d_c = d_c
-  @property
-  def ctx(self): return self.d_c.ctx
+  cdef cduk.duk_context* ctx(self): return self.d_c.ctx
   def __len__(self):
     "calls duk_get_top, which is confusingly named. the *index* of the top item is len(stack)-1 (or just -1)"
-    return cduk.duk_get_top(self.ctx)
+    return cduk.duk_get_top(self.ctx())
   def get_type(self, index=-1):
-    return DukType(cduk.duk_get_type(self.ctx,index))
-  def get(self): raise NotImplementedError
+    return DukType(cduk.duk_get_type(self.ctx(), index))
+  def get_list(self, index=-1):
+    "helper for get()"
+    a = []
+    for i in range(cduk.duk_get_length(self.ctx(), index)):
+      cduk.duk_get_prop_index(self.ctx(), index, i) # this puts the elt on the stack
+      try: a[i] = self.get(-1)
+      finally: self.pop()
+    return a
+  def get_dict(self, index=-1):
+    "helper for get()"
+    d = {}
+    cduk.duk_enum(self.ctx(), index, True)
+    while cduk.duk_next(self.ctx(), index, True): # this pushes k & v onto the stack
+      try: d[self.get(-2)]=self.get(-1)
+      finally: self.pop(2)
+    return d
+  def get_string(self, index=-1):
+    "helper"
+    cdef cduk.duk_size_t strlen
+    cdef const char* buf = cduk.duk_get_lstring(self.ctx(), index, &strlen)
+    return buf[:strlen] # docs claim this allows nulls http://docs.cython.org/src/tutorial/strings.html#passing-byte-strings
+  def get(self, index=-1):
+    if cduk.duk_is_boolean(self.ctx(), index): return bool(cduk.duk_get_boolean(self.ctx(), index))
+    elif cduk.duk_is_nan(self.ctx(), index): return float('nan')
+    elif cduk.duk_is_null_or_undefined(self.ctx(), index): return None # todo: see DukNull etc above
+    elif cduk.duk_is_number(self.ctx(), index): return cduk.duk_get_number(self.ctx(), index) # todo: is there an internal int value? if yes test for that
+    elif cduk.duk_is_string(self.ctx(), index): return self.get_string(index)
+    elif cduk.duk_is_array(self.ctx(), index): return self.get_list(index)
+    elif cduk.duk_is_object(self.ctx(), index): return self.get_dict(index) # note: I think this ends up being a catch-all. yuck.
+    else: raise TypeError('not_coercible',DukType(cduk.duk_get_type(self.ctx(),index))) # todo: return a wrapper instead. also, this never triggers because of the is_object test above
   def call(self): raise NotImplementedError
-  def tostring(self): raise NotImplementedError
+  def tostring(self, index=-1): return cduk.duk_safe_to_string(self.ctx(), index)
 
   # object property manipulators
-  def get_prop(): raise NotImplementedError
-  def set_prop(): raise NotImplementedError
-  def call_prop(): raise NotImplementedError
+  def get_prop(self, arg):
+    # todo: is int access necessary? should there be an array wrapper?
+    if isinstance(arg,int): cduk.duk_get_prop_index(self.ctx(), -1, arg)
+    elif isinstance(arg,str): cduk.duk_get_prop_string(self.ctx(), -1, arg)
+    else: raise TypeError('arg_type', type(arg))
+  def set_prop(self, str prop): cduk.duk_put_prop_string(self.ctx(), -2, prop)
+  def call_prop(self): raise NotImplementedError
   def construct(self, *args): raise NotImplementedError
   
   # eval
-  def eval_file(self, str path): duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, path))
-  def eval_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, js))
+  def eval_file(self, str path): duk_reraise(self.ctx(), cduk.duk_peval_file(self.ctx(), path))
+  def eval_string(self, basestring js): duk_reraise(self.ctx(), cduk.duk_peval_string(self.ctx(), js))
   
   # compile
-  def compile_file(self, str path): duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, path))
-  def compile_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, js))
+  def compile_file(self, str path): duk_reraise(self.ctx(), cduk.duk_pcompile_file(self.ctx(), PY_DUK_COMPILE_ARGS, path))
+  def compile_string(self, basestring js): duk_reraise(self.ctx(), cduk.duk_pcompile_string(self.ctx(), PY_DUK_COMPILE_ARGS, js))
 
   # push/pop
   def push_dict(self, d):
     "helper for push"
-    cduk.duk_push_object(self.ctx)
+    cduk.duk_push_object(self.ctx())
     try:
       for k,v in d.items():
         if not isinstance(k,str): raise TypeError('k_not_str', type(k))
         self.push(v)
-        cduk.duk_put_prop_string(self.ctx, -2, k)
+        cduk.duk_put_prop_string(self.ctx(), -2, k)
     except TypeError:
       self.pop() # i.e. cleanup
       raise
   def push_array(self, a):
     "helper for push"
-    cduk.duk_push_array(self.ctx)
+    cduk.duk_push_array(self.ctx())
     try:
       for i,x in enumerate(a):
         self.push(x)
-        cduk.duk_put_prop_index(self.ctx, -2, i)
+        cduk.duk_put_prop_index(self.ctx(), -2, i)
     except TypeError:
       self.pop() # i.e. don't leave stack dirty in error case
       raise
   def push(self, item):
-    if isinstance(item, str): duk_push_lstring(self.ctx, item, len(item))
+    if isinstance(item, str): cduk.duk_push_lstring(self.ctx(), item, len(item))
     elif isinstance(item, unicode): raise NotImplementedError('todo: unicode')
-    elif isinstance(item, bool): (cduk.duk_push_true if item else cduk.duk_push_false)(self.ctx)
-    elif isinstance(item, (int, float)): cduk.duk_push_number(self.ctx, <double>item) # todo: separate ints
+    elif isinstance(item, bool):
+      if item: cduk.duk_push_true(self.ctx())
+      else: cduk.duk_push_false(self.ctx())
+    elif isinstance(item, (int, float)): cduk.duk_push_number(self.ctx(), <double>item) # todo: separate ints
     elif isinstance(item, (list, tuple)): self.push_array(item)
     elif isinstance(item, dict): self.push_dict(item)
-    elif item is None: cduk.duk_push_null(self.ctx)
+    elif item is None: cduk.duk_push_null(self.ctx())
     else: raise TypeError('cant_coerce_type', type(item))
-  def push_undefined(self): cduk.duk_push_undefined(self.ctx)
+  def push_undefined(self): cduk.duk_push_undefined(self.ctx())
   def push_func(self, f, nargs): raise NotImplementedError
-  def pop(self, n=1): raise NotImplementedError
+  def pop(self, n=1): cduk.duk_pop_n(self.ctx(), n)
 
 cdef class DukContext:
   cdef cduk.duk_context* ctx
@@ -116,70 +156,6 @@ cdef class DukContext:
 #define PY_DUK_COPYPROP(prop) duk_get_prop_string(self->context,-1,#prop);\
   PyDict_SetItemString(dict,#prop,PyString_FromString(duk_safe_to_string(self->context,-1)));\
   duk_pop(self->context);
-
-static PyObject* pdc_getprop(pyduk_context* self,PyObject* arg){
-  // int arg means index, string arg means key
-  // this puts the result on the stack, it *doesn't* return it as a PyObject (because if it's a function you'll want to call it)
-  if (PyInt_Check(arg)) duk_get_prop_index(self->context,-1,PyInt_AsLong(arg));
-  else if (PyString_Check(arg)) duk_get_prop_string(self->context,-1,PyString_AsString(arg));
-  else {
-    PyErr_SetString(PyExc_TypeError,"need int or string");
-    return 0;
-  }
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_setprop(pyduk_context* self,PyObject* arg){
-  if (!PyString_Check(arg)) return 0;
-  duk_put_prop_string(self->context,-2,PyString_AsString(arg));
-  Py_RETURN_NONE;
-}
-
-static PyObject* pdc_popn(pyduk_context* self,PyObject* arg){
-  unsigned int n=PyInt_AsSsize_t(arg);
-  duk_pop_n(self->context,n);
-  Py_RETURN_NONE;
-}
-static PyObject* get_helper(duk_context* ctx,int index){
-  if (duk_is_boolean(ctx,index)) return PyBool_FromLong(duk_get_boolean(ctx,index));
-  else if (duk_is_nan(ctx,index)) return PyFloat_FromDouble(nan(""));
-  else if (duk_is_null_or_undefined(ctx,index)) Py_RETURN_NONE;
-  else if (duk_is_number(ctx,index)) return PyFloat_FromDouble(duk_get_number(ctx,index));
-  else if (duk_is_string(ctx,index)){
-    duk_size_t len;
-    const char* buf=duk_get_lstring(ctx,index,&len);
-    return PyString_FromStringAndSize(buf,len);
-  }
-  else if (duk_is_array(ctx,index)){ // must come before object because it's a subset
-    duk_size_t len=duk_get_length(ctx,index);
-    PyObject* list=PyList_New(len);
-    for (unsigned int i=0;i<len;++i){
-      duk_get_prop_index(ctx,index,i); // this puts the elt on the stack
-      PyList_SetItem(list,i,get_helper(ctx,-1));
-      duk_pop(ctx); // and now it's gone
-    }
-    return list;
-  }
-  else if (duk_is_object(ctx,index)){
-    // will this case trigger for functions and other unexpected things? yuck.
-    PyObject* dict=PyDict_New();
-    duk_enum(ctx,index,DUK_ENUM_OWN_PROPERTIES_ONLY);
-    while (duk_next(ctx,index,true)){ // this pushes k & v onto the stack end
-      PyObject* val=get_helper(ctx,-1);
-      duk_pop(ctx); // pop the value
-      PyObject* key=get_helper(ctx,-1);
-      duk_pop(ctx); // pop the key
-      PyDict_SetItem(dict,key,val);
-    }
-    return dict;
-  }
-  else {
-    PyErr_SetString(PyExc_TypeError,"non-coercible type");
-    return 0;
-  }
-}
-static PyObject* pdc_get(pyduk_context* self,PyObject* _){
-  return get_helper(self->context,-1);
-}
 
 const char* PYDUK_FP="__duktape_cfunc_pointer__";
 const char* PYDUK_NARGS="__duktape_cfunc_nargs__";
@@ -262,9 +238,6 @@ static PyObject* pdc_call(pyduk_context* self,PyObject* arg){
   for (unsigned int i=0;i<nargs;++i) pdc_push(self,PyTuple_GetItem(arg,i));
   PY_DUK_CATCH(duk_pcall(self->context,nargs))
   Py_RETURN_NONE;
-}
-static PyObject* pdc_tostring(pyduk_context* self,PyObject* _){
-  return PyString_FromString(duk_safe_to_string(self->context,-1));
 }
 
 // todo: py3.4 sig strings https://mail.python.org/pipermail/python-dev/2014-February/132213.html
