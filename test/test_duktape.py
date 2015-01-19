@@ -47,6 +47,19 @@ def test_push_get():
 CLASSINSTANCE="""function C(a,b){this.a=a; this.b=b;}
 C.prototype.tot=function(){return this.a+this.b;}
 new C(1,1);"""
+
+def test_get_twice():
+  "when I wrote this get() wasn't cleaning up after itself"
+  c=duktape.DukContext()
+  c.eval_string("function C(a,b){this.a=a; this.b=b;}")
+  c.get_global('C')
+  c.construct(1,[2,3])
+  assert len(c)==2
+  assert c.get()=={'a':1.,'b':[2.,3.]}
+  assert len(c)==2
+  assert c.get()=={'a':1.,'b':[2.,3.]}
+  assert len(c)==2
+
 def test_getprop():
   c=duktape.DukContext()
   c.eval_string(CLASSINSTANCE)

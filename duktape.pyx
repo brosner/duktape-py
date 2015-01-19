@@ -25,6 +25,7 @@ cdef duk_reraise(cduk.duk_context* ctx, int res):
 
 class DukType:
   "wrapper for integer types that provide extra information"
+  # todo: add flags for array, function
   TYPES={
     0:'missing', # this means invalid stack index
     1:'undefined',
@@ -61,9 +62,11 @@ cdef get_dict(cduk.duk_context* ctx, index=-1):
   "helper for get_helper()"
   d = {}
   cduk.duk_enum(ctx, index, cduk.DUK_ENUM_OWN_PROPERTIES_ONLY)
-  while cduk.duk_next(ctx, index, True): # this pushes k & v onto the stack
-    try: d[get_helper(ctx, -2)]=get_helper(ctx, -1)
-    finally: cduk.duk_pop_n(ctx, 2)
+  try:
+    while cduk.duk_next(ctx, index, True): # this pushes k & v onto the stack
+      try: d[get_helper(ctx, -2)]=get_helper(ctx, -1)
+      finally: cduk.duk_pop_n(ctx, 2)
+  finally: cduk.duk_pop_n(ctx, 1) # pop the enum
   return d
 cdef get_string(cduk.duk_context* ctx, index=-1):
   "helper for get_helper()"
@@ -186,6 +189,7 @@ cdef class DukContext:
     duk_reraise(self.ctx, cduk.duk_pcall_prop(self.ctx, old_top-1, len(jsargs)))
   def construct(self, *args):
     old_top = len(self)
+    if not cduk.duk_is_function(self.ctx, -1): raise TypeError('not_function')
     try: map(self.push, args)
     except TypeError:
       cduk.duk_set_top(self.ctx, old_top)
