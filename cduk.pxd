@@ -1,6 +1,7 @@
 "cython defs for duktape"
 
 cdef extern from "duktape_c/duktape.h":
+  # typedefs
   ctypedef void duk_context
   ctypedef size_t duk_size_t
   ctypedef int duk_int_t
@@ -12,6 +13,9 @@ cdef extern from "duktape_c/duktape.h":
   ctypedef duk_small_int_t duk_ret_t
   ctypedef duk_ret_t (*duk_c_function)(duk_context *ctx)
   ctypedef duk_uint_t duk_uarridx_t
+
+  # macro values
+  unsigned int DUK_ENUM_OWN_PROPERTIES_ONLY
 
   duk_context* duk_create_heap_default() # macro
   void duk_destroy_heap(duk_context* ctx)
@@ -38,6 +42,7 @@ cdef extern from "duktape_c/duktape.h":
   duk_bool_t duk_put_global_string(duk_context *ctx, const char *key)
 
   duk_idx_t duk_get_top(duk_context *ctx)
+  void duk_set_top(duk_context *ctx, duk_idx_t index)
   duk_int_t duk_get_type(duk_context *ctx, duk_idx_t index)
 
   # is_*
@@ -55,6 +60,7 @@ cdef extern from "duktape_c/duktape.h":
   duk_bool_t duk_is_array(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_function(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_c_function(duk_context *ctx, duk_idx_t index)
+  duk_bool_t duk_is_callable(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_ecmascript_function(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_bound_function(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_thread(duk_context *ctx, duk_idx_t index)
@@ -82,3 +88,8 @@ cdef extern from "duktape_c/duktape.h":
   duk_bool_t duk_put_prop_string(duk_context *ctx, duk_idx_t obj_index, const char *key)
   duk_bool_t duk_put_prop_index(duk_context *ctx, duk_idx_t obj_index, duk_uarridx_t arr_index)
   const char* duk_safe_to_string(duk_context* ctx, duk_idx_t index) # macro
+
+  duk_int_t duk_pcall(duk_context *ctx, duk_idx_t nargs)
+  duk_int_t duk_pcall_method(duk_context *ctx, duk_idx_t nargs)
+  duk_int_t duk_pcall_prop(duk_context *ctx, duk_idx_t obj_index, duk_idx_t nargs)
+  void duk_new(duk_context *ctx, duk_idx_t nargs)
