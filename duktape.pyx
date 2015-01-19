@@ -1,79 +1,122 @@
-// ultra-basic wrapper module for duktape
+"wrapper module for duktape"
 
-#include "Python.h"
-#include "duktape.h"
+cimport cduk
 
-static PyObject* DuktapeError=0;
+class DuktapeError(StandardError):
+  def __init__(self, name, message, file, line, stack):
+    self.name, self.message, self.file, self.line, self.stack = name, message, file, line, stack
+  def __repr__(self): return '<Duktape:%s %s:%s "%s">'%(self.name, self.file, self.line, self.message)
 
+cdef getprop(duk_context* ctx, str prop):
+  "get property from stack-top object, return as python string, leave stack clean"
+  cduk.duk_get_prop_string(ctx, -1, prop)
+  cdef str res = cduk.duk_safe_to_string(ctx, -1)
+  cduk.duk_pop(ctx)
+  return res
+
+cdef duk_reraise(duk_context* ctx, int res):
+  "for duktape meths that return nonzero to indicate trouble, convert the error object to python and raise it"
+  if res:
+    err = DuktapeError(*[getprop(ctx, prop) for prop in ('name','message','file','line','stack')])
+    cduk.duk_pop(ctx)
+    raise err
+
+class DukType:
+  "wrapper for integer types that provide extra information"
+  def __init__(self, type_int): self.type_int = type_int
+  def name(self): raise NotImplementedError
+  @classmethod
+  def fromname(clas, name): raise NotImplementedError
+
+cdef class DukWrappedObject:
+  pass # todo: use this to wrap things that we don't know how to convert to a python object
+
+cdef unsigned int PY_DUK_COMPILE_ARGS
+
+cdef class DukStack:
+  "functions that manipulate the JS stack"
+  def __init__(self, d_c): self.d_c = d_c
+  @property
+  def ctx(self): return self.d_c.ctx
+  def __len__(self):
+    "calls duk_get_top, which is confusingly named. the *index* of the top item is len(stack)-1 (or just -1)"
+    return cduk.duk_get_top(self.ctx)
+  def get_type(self, index=-1):
+    return DukType(cduk.duk_get_type(self.ctx,index))
+  def get(self): raise NotImplementedError
+  def call(self): raise NotImplementedError
+  def tostring(self): raise NotImplementedError
+
+  # object property manipulators
+  def get_prop(): raise NotImplementedError
+  def set_prop(): raise NotImplementedError
+  def call_prop(): raise NotImplementedError
+  def construct(self, *args): raise NotImplementedError
+  
+  # eval
+  def eval_file(self, str path): duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, path))
+  def eval_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, js))
+  
+  # compile
+  def compile_file(self, str path): duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, path))
+  def compile_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, js))
+
+  # push/pop
+  def push_dict(self, d):
+    "helper for push"
+    cduk.duk_push_object(self.ctx)
+    try:
+      for k,v in d.items():
+        if not isinstance(k,str): raise TypeError('k_not_str', type(k))
+        self.push(v)
+        cduk.duk_put_prop_string(self.ctx, -2, k)
+    except TypeError:
+      self.pop() # i.e. cleanup
+      raise
+  def push_array(self, a):
+    "helper for push"
+    cduk.duk_push_array(self.ctx)
+    try:
+      for i,x in enumerate(a):
+        self.push(x)
+        cduk.duk_put_prop_index(self.ctx, -2, i)
+    except TypeError:
+      self.pop() # i.e. don't leave stack dirty in error case
+      raise
+  def push(self, item):
+    if isinstance(item, str): duk_push_lstring(self.ctx, item, len(item))
+    elif isinstance(item, unicode): raise NotImplementedError('todo: unicode')
+    elif isinstance(item, bool): (cduk.duk_push_true if item else cduk.duk_push_false)(self.ctx)
+    elif isinstance(item, (int, float)): cduk.duk_push_number(self.ctx, <double>item) # todo: separate ints
+    elif isinstance(item, (list, tuple)): self.push_array(item)
+    elif isinstance(item, dict): self.push_dict(item)
+    elif item is None: cduk.duk_push_null(self.ctx)
+    else: raise TypeError('cant_coerce_type', type(item))
+  def push_undefined(self): cduk.duk_push_undefined(self.ctx)
+  def push_func(self, f, nargs): raise NotImplementedError
+  def pop(self, n=1): raise NotImplementedError
+
+cdef class DukContext:
+  cdef cduk.duk_context* ctx
+  def __cinit__(self): self.ctx = cduk.duk_create_heap_default()
+  def __dealloc__(self):
+    if self.ctx:
+      cduk.duk_destroy_heap(self.ctx)
+      self.ctx = NULL
+
+  # misc
+  def get_stack(self): return DukStack(self)
+  def gc(self): cduk.duk_gc(self.ctx, 0)
+
+  # globals
+  def get_global(self, str name): cduk.duk_get_global_string(self.ctx, name)
+  def set_global(self, str name): cduk.duk_put_global_string(self.ctx, name)
+
+"""
 #define PY_DUK_COPYPROP(prop) duk_get_prop_string(self->context,-1,#prop);\
   PyDict_SetItemString(dict,#prop,PyString_FromString(duk_safe_to_string(self->context,-1)));\
   duk_pop(self->context);
 
-#define PY_DUK_CATCH(call)  if (call){\
-  PyObject* dict=PyDict_New();\
-  PY_DUK_COPYPROP(name);\
-  PY_DUK_COPYPROP(message);\
-  PY_DUK_COPYPROP(file);\
-  PY_DUK_COPYPROP(line);\
-  PY_DUK_COPYPROP(stack);\
-  duk_pop(self->context);\
-  PyErr_SetObject(DuktapeError,dict);\
-  return 0;\
-}
-
-struct pyduk_context {
-  PyObject_HEAD
-  duk_context* context;
-};
-
-static void pyduk_ctx_dealloc(pyduk_context* self){
-  duk_destroy_heap(self->context);
-  self->context=0;
-  self->ob_type->tp_free((PyObject*)self);
-}
-static PyObject* pyduk_ctx_New(PyTypeObject* type,PyObject* args, PyObject* kwds){
-  pyduk_context* self=(pyduk_context*)type->tp_alloc(type,0);
-  self->context=0;
-  if (self) self->context=duk_create_heap_default();
-  return (PyObject*)self;
-}
-
-static PyObject* pdc_eval_file(pyduk_context* self,PyObject* arg){
-  const char* path=PyString_AsString(arg);
-  if (!path) return 0;
-  PY_DUK_CATCH(duk_peval_file(self->context,path))
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_eval_string(pyduk_context* self,PyObject* arg){
-  // nextup: setjmp here
-  const char* src=PyString_AsString(arg);
-  if (!src) return 0; // did py set the error?
-  PY_DUK_CATCH(duk_peval_string(self->context,src))
-  Py_RETURN_NONE;
-}
-
-#define PY_DUK_COMPILE_ARGS 0
-static PyObject* pdc_compile_file(pyduk_context* self,PyObject* arg){
-  const char* path=PyString_AsString(arg);
-  if (!path) return 0;
-  PY_DUK_CATCH(duk_pcompile_file(self->context,PY_DUK_COMPILE_ARGS,path))
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_compile_string(pyduk_context* self,PyObject* arg){
-  // nextup: setjmp here
-  const char* src=PyString_AsString(arg);
-  if (!src) return 0; // did py set the error?
-  PY_DUK_CATCH(duk_pcompile_string(self->context,PY_DUK_COMPILE_ARGS,src))
-  Py_RETURN_NONE;
-}
-
-static PyObject* pdc_stacklen(pyduk_context* self,PyObject* arg){
-  return PyInt_FromSsize_t(duk_get_top(self->context));
-}
-static PyObject* pdc_gettype(pyduk_context* self,PyObject* arg){
-  unsigned int index=PyInt_AsSsize_t(arg); // todo: typecheck
-  return PyInt_FromSsize_t(duk_get_type(self->context,index));
-}
 static PyObject* pdc_getprop(pyduk_context* self,PyObject* arg){
   // int arg means index, string arg means key
   // this puts the result on the stack, it *doesn't* return it as a PyObject (because if it's a function you'll want to call it)
@@ -88,51 +131,6 @@ static PyObject* pdc_getprop(pyduk_context* self,PyObject* arg){
 static PyObject* pdc_setprop(pyduk_context* self,PyObject* arg){
   if (!PyString_Check(arg)) return 0;
   duk_put_prop_string(self->context,-2,PyString_AsString(arg));
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_push(pyduk_context* self,PyObject* arg){
-  if (PyString_Check(arg)){
-    char* buf; Py_ssize_t len;
-    PyString_AsStringAndSize(arg,&buf,&len);
-    duk_push_lstring(self->context,buf,len);
-  }
-  else if (PyBool_Check(arg)){ // bool check comes before int because PyInt_Check(bool_object) works
-    if (arg==Py_True) duk_push_true(self->context);
-    else duk_push_false(self->context);
-  }
-  else if (PyInt_Check(arg)||PyFloat_Check(arg)){
-    duk_push_number(self->context,(double)(PyInt_Check(arg)?PyInt_AsLong(arg):PyFloat_AsDouble(arg)));
-  }
-  else if (PyList_Check(arg)||PyTuple_Check(arg)){
-    duk_push_array(self->context);
-    unsigned int object_index=duk_get_top_index(self->context);
-    Py_ssize_t len=PyList_Check(arg)?PyList_Size(arg):PyTuple_Size(arg);
-    for (unsigned int i=0;i<len;++i){
-      pdc_push(self,(PyList_Check(arg)?PyList_GetItem:PyTuple_GetItem)(arg,i));
-      duk_put_prop_index(self->context,object_index,i);
-    }
-  }
-  else if (PyDict_Check(arg)){
-    duk_push_object(self->context);
-    unsigned int object_index=duk_get_top_index(self->context);
-    Py_ssize_t pos=0; PyObject* key,*val;
-    while (PyDict_Next(arg,&pos,&key,&val)){
-      if (!PyString_Check(key)) return 0; // todo: consider cast to JSON with a flag
-      // todo below: AsStringAndSize so these don't have to be null-term-able
-      pdc_push(self,val);
-      duk_put_prop_string(self->context,object_index,PyString_AsString(key));
-    }
-  }
-  else if (arg==Py_None) duk_push_null(self->context);
-  // todo: case for callable with varargs
-  else {
-    PyErr_SetString(PyExc_TypeError,"non-coercible type");
-    return 0;
-  }
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_push_undefined(pyduk_context* self,PyObject* _){
-  duk_push_undefined(self->context);
   Py_RETURN_NONE;
 }
 
@@ -245,28 +243,13 @@ static PyObject* pdc_callprop(pyduk_context* self,PyObject* args){
   PY_DUK_CATCH(duk_pcall_prop(self->context,old_top-1,nargs))
   Py_RETURN_NONE; // because the object may not be something we can coerce
 }
-static PyObject* pdc_getglobal(pyduk_context* self,PyObject* arg){
-  char* name=PyString_AsString(arg);
-  if (!name) return 0;
-  duk_get_global_string(self->context,name);
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_setglobal(pyduk_context* self,PyObject* arg){
-  char* name=PyString_AsString(arg);
-  if (!name) return 0;
-  duk_put_global_string(self->context,name);
-  Py_RETURN_NONE;
-}
+
 static PyObject* pdc_construct(pyduk_context* self,PyObject* arg){
   if (!PyTuple_Check(arg)) return 0;
   unsigned int nargs=PyTuple_Size(arg);
   for (unsigned int i=0;i<nargs;++i) pdc_push(self,PyTuple_GetItem(arg,i));
   // warning: is there no safe version of new?
   duk_new(self->context,nargs);
-  Py_RETURN_NONE;
-}
-static PyObject* pdc_gc(pyduk_context* self,PyObject* _){
-  duk_gc(self->context,0);
   Py_RETURN_NONE;
 }
 static PyObject* pdc_call(pyduk_context* self,PyObject* arg){
@@ -291,7 +274,6 @@ static PyMethodDef pyduk_context_meths[]={
   {"eval_string", (PyCFunction)pdc_eval_string, METH_O, "eval_string(js_source_str). leaves a return value on the top of the stack"},
   {"compile_file", (PyCFunction)pdc_compile_file, METH_O, "compile_file(filename). leaves a return value on the top of the stack"},
   {"compile_string", (PyCFunction)pdc_compile_string, METH_O, "compile_string(js_source_str). leaves a return value on the top of the stack"},
-  {"stacklen", (PyCFunction)pdc_stacklen, METH_NOARGS, "stacklen(). calls duk_get_top, which is confusingly named. use result - 1 for anything wanting a stack index."},
   {"get_type", (PyCFunction)pdc_gettype, METH_O, "get_type(index). type of value at index (pass -1 for top). returns an integer which has duktape meaning"},
   {"push", (PyCFunction)pdc_push, METH_O, "push(pyobject). push python object to JS stack. TypeError if it's something we don't handle"},
   {"push_undefined", (PyCFunction)pdc_push_undefined, METH_NOARGS, "push_undefined(). necessary because None gets coerced to null."},
@@ -310,48 +292,5 @@ static PyMethodDef pyduk_context_meths[]={
   {0}
 };
 
-static PyTypeObject duk_context_type = {
-  PyObject_HEAD_INIT(0)
-  0,                         /*ob_size*/
-  "duktape.duk_context",             /*tp_name*/
-  sizeof(pyduk_context), /*tp_basicsize*/
-  0,                         /*tp_itemsize*/
-  (destructor)pyduk_ctx_dealloc, // tp_dealloc
-  0,                         /*tp_print*/
-  0,                         /*tp_getattr*/
-  0,                         /*tp_setattr*/
-  0,                         /*tp_compare*/
-  0,                         /*tp_repr*/
-  0,                         /*tp_as_number*/
-  0,                         /*tp_as_sequence*/
-  0,                         /*tp_as_mapping*/
-  0,                         /*tp_hash */
-  0,                         /*tp_call*/
-  0,                         /*tp_str*/
-  0,                         /*tp_getattro*/
-  0,                         /*tp_setattro*/
-  0,                         /*tp_as_buffer*/
-  Py_TPFLAGS_DEFAULT,        /*tp_flags*/
-  "python wrapper for C duk_context", // tp_doc
-};
-
-static PyMethodDef module_meths[]={{0}};
-
-extern "C" {
-
-void initduktape(){
-  duk_context_type.tp_methods=pyduk_context_meths;
-  duk_context_type.tp_new=pyduk_ctx_New;
-  if (PyType_Ready(&duk_context_type) < 0) return;
-  PyObject* module = Py_InitModule3("duktape", module_meths, "wrapper for duktape JS engine");
-  if (!module) return;
-  // duk_context
-  Py_INCREF(&duk_context_type);
-  PyModule_AddObject(module, "duk_context", (PyObject*)&duk_context_type);
-  // JSError
-  DuktapeError=PyErr_NewException("duktape.DuktapeError",NULL,NULL);
-  Py_INCREF(DuktapeError);
-  PyModule_AddObject(module,"DuktapeError",DuktapeError);
 }
-
-}
+"""
