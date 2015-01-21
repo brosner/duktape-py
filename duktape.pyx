@@ -119,7 +119,7 @@ cdef push_helper(cduk.duk_context* ctx, item):
 cdef const char* PYDUK_FP="__duktape_cfunc_pointer__"
 cdef const char* PYDUK_NARGS="__duktape_cfunc_nargs__"
 cdef cduk.duk_ret_t callback_wrapper(cduk.duk_context* ctx):
-  "this is used in push_func"
+  "this is used in push_func. it's the c function pointer that wraps the duktape external function callback"
   cduk.duk_push_current_function(ctx)
   # warning: this section dangerously assumes that the props (PDUK_FP and _NARGS) haven't been modified
   cduk.duk_get_prop_string(ctx, -1, PYDUK_FP)
@@ -144,14 +144,20 @@ cdef class DukContext:
     if self.ctx:
       cduk.duk_destroy_heap(self.ctx)
       self.ctx = NULL
-  def gc(self): cduk.duk_gc(self.ctx, 0)
+  def gc(self):
+    "run garbage collector"
+    cduk.duk_gc(self.ctx, 0)
   def __len__(self):
     "calls duk_get_top, which is confusingly named. the *index* of the top item is len(stack)-1 (or just -1)"
     return cduk.duk_get_top(self.ctx)
   def get_type(self, index=-1):
+    "type of value (as DukType) at index (pass -1 for top)"
     return DukType(cduk.duk_get_type(self.ctx, index))
-  def get(self, index=-1): return get_helper(self.ctx, index)
+  def get(self, index=-1):
+    "get whatever's at the top of the stack and return to python. fail if stack empty or object is not coercible/wrappable."
+    return get_helper(self.ctx, index)
   def call(self, *args):
+    "stack top object must be callable. see also call_prop"
     if not cduk.duk_is_callable(self.ctx, -1): raise TypeError("stack_top:not_callable")
     top = len(self)
     try: map(self.push, args)
@@ -160,16 +166,22 @@ cdef class DukContext:
       raise
     # todo: make sure it cleans the stack in error case
     duk_reraise(self.ctx, cduk.duk_pcall(self.ctx, len(args)))
-  def tostring(self, index=-1): return cduk.duk_safe_to_string(self.ctx, index)
+  def tostring(self, index=-1):
+    "return a string representation of the stack top object"
+    return cduk.duk_safe_to_string(self.ctx, index)
 
   # object property manipulators
   def get_prop(self, arg):
+    "key can be int (index lookup) or string (key lookup)"
     # todo: is int access necessary? should there be an array wrapper?
     if isinstance(arg,int): cduk.duk_get_prop_index(self.ctx, -1, arg)
     elif isinstance(arg,str): cduk.duk_get_prop_string(self.ctx, -1, arg)
     else: raise TypeError('arg_type', type(arg))
-  def set_prop(self, str prop): cduk.duk_put_prop_string(self.ctx, -2, prop)
+  def set_prop(self, str prop):
+    "sets obj[key]=thing if the end of the duktape stack is [obj,thing]"
+    cduk.duk_put_prop_string(self.ctx, -2, prop)
   def call_prop(self, str prop, tuple jsargs):
+    "stack top should be a function. prop is the string name of the function. args must be a tuple, can be empty"
     old_top = len(self)
     try:
       self.push(prop)
@@ -180,6 +192,7 @@ cdef class DukContext:
     # todo: I'm assuming that it cleans the stack in case of an error. instead of assuming, test.
     duk_reraise(self.ctx, cduk.duk_pcall_prop(self.ctx, old_top-1, len(jsargs)))
   def construct(self, *args):
+    "the type you're making (i.e. its constructor function) should be stack-top. this can SIGABRT because there's no safe version of duk_new"
     old_top = len(self)
     if not cduk.duk_is_function(self.ctx, -1): raise TypeError('not_function')
     try: map(self.push, args)
@@ -189,17 +202,31 @@ cdef class DukContext:
     cduk.duk_new(self.ctx, len(args)) # todo: catchable new; I think duktape doesn't have it yet, stay alert
   
   # eval
-  def eval_file(self, str path): duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, path))
-  def eval_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, js))
-  
+  def eval_file(self, str path):
+    "leaves a return value on the top of the stack"
+    duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, path))
+  def eval_string(self, basestring js):
+    "leaves a return value on the top of the stack"
+    duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, js))
+
   # compile
-  def compile_file(self, str path): duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, path))
-  def compile_string(self, basestring js): duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, js))
+  # todo below: I think compile *doesn't* leave a ret val on the stack. otherwise why is it different from eval_*?
+  def compile_file(self, str path):
+    "leaves a return value on the top of the stack"
+    duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, path))
+  def compile_string(self, basestring js):
+    "leaves a return value on the top of the stack"
+    duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, js))
 
   # push/pop
-  def push(self, item): push_helper(self.ctx, item)
-  def push_undefined(self): cduk.duk_push_undefined(self.ctx)
+  def push(self, item):
+    "push python object to JS stack. TypeError if it's something we don't handle"
+    push_helper(self.ctx, item)
+  def push_undefined(self):
+    "necessary because None gets coerced to null"
+    cduk.duk_push_undefined(self.ctx)
   def push_func(self, f, nargs):
+    "nargs -1 for varargs. WARNING this leaks memory (the function is INCREF'd forever)"
     if not callable(f): raise TypeError
     if not isinstance(nargs,int): raise TypeError
     if nargs<0 and nargs!=-1: raise ValueError('-1 is varargs, no other negatives allowed')
@@ -209,38 +236,15 @@ cdef class DukContext:
     cduk.duk_put_prop_string(self.ctx, -2, PYDUK_FP)
     self.push(nargs)
     cduk.duk_put_prop_string(self.ctx, -2, PYDUK_NARGS)
-  def pop(self, n=1): cduk.duk_pop_n(self.ctx, n)
+  def pop(self, n=1):
+    "pop N elts from the stack. doesn't return them, just removes them"
+    cduk.duk_pop_n(self.ctx, n)
 
   # globals
-  def get_global(self, str name): cduk.duk_get_global_string(self.ctx, name)
-  def set_global(self, str name): cduk.duk_put_global_string(self.ctx, name)
+  def get_global(self, str name):
+    "look something global up by name, drop it on the stack"
+    cduk.duk_get_global_string(self.ctx, name)
+  def set_global(self, str name):
+    "set name globally to the thing at the top of the stack"
+    cduk.duk_put_global_string(self.ctx, name)
 
-"""
-
-// todo: py3.4 sig strings https://mail.python.org/pipermail/python-dev/2014-February/132213.html
-// todo: C wrapper for passing py funcs, and then classes, to JS -- useful for mocking
-static PyMethodDef pyduk_context_meths[]={
-  {"eval_file", (PyCFunction)pdc_eval_file, METH_O, "eval_file(filename). leaves a return value on the top of the stack"},
-  {"eval_string", (PyCFunction)pdc_eval_string, METH_O, "eval_string(js_source_str). leaves a return value on the top of the stack"},
-  {"compile_file", (PyCFunction)pdc_compile_file, METH_O, "compile_file(filename). leaves a return value on the top of the stack"},
-  {"compile_string", (PyCFunction)pdc_compile_string, METH_O, "compile_string(js_source_str). leaves a return value on the top of the stack"},
-  {"get_type", (PyCFunction)pdc_gettype, METH_O, "get_type(index). type of value at index (pass -1 for top). returns an integer which has duktape meaning"},
-  {"push", (PyCFunction)pdc_push, METH_O, "push(pyobject). push python object to JS stack. TypeError if it's something we don't handle"},
-  {"push_undefined", (PyCFunction)pdc_push_undefined, METH_NOARGS, "push_undefined(). necessary because None gets coerced to null."},
-  {"push_func", (PyCFunction)pdc_push_func, METH_VARARGS, "push_func(callable,nargs). nargs -1 for varargs. WARNING this leaks memory."},
-  {"popn", (PyCFunction)pdc_popn, METH_O, "popn(nelts). pop N elts from the stack. doesn't return them, just removes them."},
-  {"get", (PyCFunction)pdc_get, METH_NOARGS, "get(). get whatever's at the top of the stack. fail if stack empty or object is not coercible/wrappable."},
-  {"get_prop", (PyCFunction)pdc_getprop, METH_O, "get_prop(key). key can be int (index lookup) or string (key lookup)."},
-  {"set_prop", (PyCFunction)pdc_setprop, METH_O, "set_prop(key). sets obj[key]=thing if the end of the duktape stack is [obj,thing]."},
-  {"call_prop", (PyCFunction)pdc_callprop, METH_VARARGS, "call_prop(function_name,args). args must be a tuple. can be empty."},
-  {"get_global", (PyCFunction)pdc_getglobal, METH_O, "get_global(name). look something global up by name"},
-  {"set_global", (PyCFunction)pdc_setglobal, METH_O, "set_global(name). set name globally to the thing at the top of the stack."},
-  {"construct", (PyCFunction)pdc_construct, METH_O, "construct(args). args is a tuple. the type you're making should be stack-top."},
-  {"gc", (PyCFunction)pdc_gc, METH_NOARGS, "gc(). run garbage collector"},
-  {"call", (PyCFunction)pdc_call, METH_O, "call(args_tuple). see also call_prop."},
-  {"tostring", (PyCFunction)pdc_tostring, METH_NOARGS, "tostring(). return a string representation of the stack top object."},
-  {0}
-};
-
-}
-"""
