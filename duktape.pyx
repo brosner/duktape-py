@@ -22,15 +22,15 @@ class DuktapeError(Exception):
         self.stack = stack
 
     def __str__(self):
-        return repr(self)
-
-    def __repr__(self):
-        return "<Duktape:{} {}:{} \"{\">".format(
+        return "[{} {}:{}] {}".format(
             self.name,
             self.file,
             self.line,
-            self.message
+            self.message,
         )
+
+    def __repr__(self):
+        return "<Duktape:{}>".format(str(self))
 
 
 cdef getprop(cduk.duk_context *ctx, str prop):
@@ -40,7 +40,7 @@ cdef getprop(cduk.duk_context *ctx, str prop):
     cduk.duk_get_prop_string(ctx, -1, smart_str(prop))
     cdef const char *res = cduk.duk_safe_to_string(ctx, -1)
     cduk.duk_pop(ctx)
-    return res
+    return force_unicode(res)
 
 
 cdef duk_reraise(cduk.duk_context* ctx, int res):
