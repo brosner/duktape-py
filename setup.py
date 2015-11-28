@@ -1,6 +1,5 @@
 from distutils.core import setup, Extension
 
-
 setup(
     name="duktape",
     version="0.0.3",
