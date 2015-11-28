@@ -166,7 +166,7 @@ cdef class DukContext:
     "stack top object must be callable. see also call_prop"
     if not cduk.duk_is_callable(self.ctx, -1): raise TypeError("stack_top:not_callable")
     top = len(self)
-    try: map(self.push, args)
+    try: list(map(self.push, args))
     except TypeError:
       cduk.duk_set_top(self.ctx, top)
       raise
@@ -191,7 +191,7 @@ cdef class DukContext:
     old_top = len(self)
     try:
       self.push(prop)
-      map(self.push,jsargs)
+      list(map(self.push,jsargs))
     except TypeError:
       cduk.duk_set_top(self.ctx, old_top)
       raise
@@ -201,7 +201,7 @@ cdef class DukContext:
     "the type you're making (i.e. its constructor function) should be stack-top. this can SIGABRT because there's no safe version of duk_new"
     old_top = len(self)
     if not cduk.duk_is_function(self.ctx, -1): raise TypeError('not_function')
-    try: map(self.push, args)
+    try: list(map(self.push, args))
     except TypeError:
       cduk.duk_set_top(self.ctx, old_top)
       raise
