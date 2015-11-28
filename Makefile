@@ -6,6 +6,6 @@ test: build
 	py.test -xv
 
 clean:
-	rm -rf build/ duktape.c duktape*.so
+	rm -rf build/ duktape*.so *.egg-info .cache
 
 .PHONY: build clean
