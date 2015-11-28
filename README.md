@@ -1,6 +1,12 @@
 duktape-py
 ==========
-python wrapper for duktape, an embeddable javascript engine
+
+This project was originally Abe Winter's, but he has transferred ownership over
+to me (Brian Rosner). I plan on fixing issues and implementing new features. I
+have already started supporting Python 3 and updated duktape to 1.3.1. More to
+come, so stay tuned!
+
+Python wrapper for duktape, an embeddable Javascript engine
 
 # demo
 ```python
@@ -18,7 +24,7 @@ python wrapper for duktape, an embeddable javascript engine
 
 ```python
 >>> def pushget(x): c.push(x); return c.get()
-... 
+...
 >>> map(pushget,[1,2.,'three',[4,5],{'6':7},[[8]]])
 [1.0, 2.0, 'three', [4.0, 5.0], {'6': 7.0}, [[8.0]]]
 ```
@@ -34,7 +40,7 @@ you can make python functions callable from javascript (though it leaks memory a
 
 ```python
 >>> def add(a,b): return a+b
-... 
+...
 >>> c.push_func(add,2)
 >>> c.call(1,2)
 >>> c.get()
@@ -55,6 +61,6 @@ pip install duktape
 # warnings
 * use this for testing only
 * note the version (0.0.2). this is not mature.
-* don't run in production unless you like `SIGABRT` 
-* this isn't full-featured; most of duktape *isn't* exposed 
+* don't run in production unless you like `SIGABRT`
+* this isn't full-featured; most of duktape *isn't* exposed
 * this is *almost* as low-level as duktape so you'll have to interact with the stack
