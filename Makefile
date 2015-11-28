@@ -1,5 +1,7 @@
-build:
+duktape.c:
 	cython duktape.pyx
+
+build: duktape.c
 	python setup.py build_ext --inplace
 
 test: build
