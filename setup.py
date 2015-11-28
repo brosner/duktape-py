@@ -4,7 +4,7 @@ from distutils.core import setup, Extension
 setup(
     name="duktape",
     version="0.0.3",
-    description="python wrapper for duktape, an embeddable javascript library",
+    description="Python wrapper for duktape, an embeddable Javascript library",
     ext_modules=[
         Extension(
             "duktape",
@@ -14,8 +14,8 @@ setup(
             ]
         )
     ],
-    author="Abe Winter",
-    author_email="abe-winter@users.noreply.github.com",
-    url="https://github.com/abe-winter/duktape-py",
+    author="Brian Rosner",
+    author_email="brosner@gmail.com",
+    url="https://github.com/brosner/duktape-py",
     keywords=["javascript", "duktape"],
 )
