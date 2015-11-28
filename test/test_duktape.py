@@ -6,7 +6,7 @@ def test_create(): duktape.DukContext()
 def test_eval_file():
   c=duktape.DukContext()
   with tempfile.NamedTemporaryFile() as tf:
-    tf.write('var a={a:1,b:2};')
+    tf.write(b'var a={a:1,b:2};')
     tf.flush()
     c.eval_file(tf.name)
   assert len(c)==1
@@ -32,7 +32,7 @@ def test_push_gettype():
     c.push(x)
     return c.get_type()
   codes=map(push,['123',123,123.,True,False,None,(1,2,3),[1,2,3],[[1]],{'a':1,'b':'2'}]);
-  print 'codes',codes
+  print('codes',codes)
   assert [code.type() for code in codes]==[str,float,float,bool,bool,type(None),object,object,object,object]
   c.push_undefined()
   assert c.get_type().type()=='undefined'
@@ -41,7 +41,7 @@ def test_push_get():
   for v in ['123',123.,True,False,[1,2,3],[[1]],{'a':1,'b':2}]:
     c.push(v)
     assert v==c.get()
-    print v
+    print(v)
 
 # SECTION: properties and function calls
 CLASSINSTANCE="""function C(a,b){this.a=a; this.b=b;}
@@ -50,10 +50,15 @@ new C(1,1);"""
 
 def test_get_twice():
   "when I wrote this get() wasn't cleaning up after itself"
+  print("a")
   c=duktape.DukContext()
+  print("b")
   c.eval_string("function C(a,b){this.a=a; this.b=b;}")
+  print("c")
   c.get_global('C')
+  print("d")
   c.construct(1,[2,3])
+  print("e")
   assert len(c)==2
   assert c.get()=={'a':1.,'b':[2.,3.]}
   assert len(c)==2
@@ -101,7 +106,7 @@ def test_call():
   c=duktape.DukContext()
   c.eval_string('(function(a,b){return a+b;})')
   c.call(1,2)
-  print c.get()
+  print(c.get())
   assert c.get()==3.
 
 def test_push_func():

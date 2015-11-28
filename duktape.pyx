@@ -3,7 +3,13 @@
 cimport cduk
 cimport cpython
 
-class DuktapeError(StandardError):
+def force_unicode(b):
+    return b.decode("utf-8")
+
+def smart_str(s):
+    return s.encode("utf-8")
+
+class DuktapeError(Exception):
   def __init__(self, name, message, file, line, stack):
     self.name, self.message, self.file, self.line, self.stack = name, message, file, line, stack
   def __str__(self): return repr(self)
@@ -11,7 +17,7 @@ class DuktapeError(StandardError):
 
 cdef getprop(cduk.duk_context* ctx, str prop):
   "get property from stack-top object, return as python string, leave stack clean"
-  cduk.duk_get_prop_string(ctx, -1, prop)
+  cduk.duk_get_prop_string(ctx, -1, smart_str(prop))
   cdef const char* res = cduk.duk_safe_to_string(ctx, -1)
   cduk.duk_pop(ctx)
   return res
@@ -72,7 +78,7 @@ cdef get_string(cduk.duk_context* ctx, index=-1):
   "helper for get_helper()"
   cdef cduk.duk_size_t strlen
   cdef const char* buf = cduk.duk_get_lstring(ctx, index, &strlen)
-  return buf[:strlen] # docs claim this allows nulls http://docs.cython.org/src/tutorial/strings.html#passing-byte-strings
+  return force_unicode(buf[:strlen]) # docs claim this allows nulls http://docs.cython.org/src/tutorial/strings.html#passing-byte-strings
 cdef get_helper(cduk.duk_context* ctx, index=-1):
   if cduk.duk_is_boolean(ctx, index): return bool(cduk.duk_get_boolean(ctx, index))
   elif cduk.duk_is_nan(ctx, index): return float('nan')
@@ -90,7 +96,7 @@ cdef push_dict(cduk.duk_context* ctx, d):
     for k,v in d.items():
       if not isinstance(k,str): raise TypeError('k_not_str', type(k))
       push_helper(ctx,v)
-      cduk.duk_put_prop_string(ctx, -2, k)
+      cduk.duk_put_prop_string(ctx, -2, smart_str(k))
   except TypeError:
     cduk.duk_pop(ctx)
     raise
@@ -105,7 +111,7 @@ cdef push_array(cduk.duk_context* ctx, a):
     cduk.duk_pop(ctx) # cleanup
     raise
 cdef push_helper(cduk.duk_context* ctx, item):
-  if isinstance(item, str): cduk.duk_push_lstring(ctx, item, len(item))
+  if isinstance(item, str): cduk.duk_push_lstring(ctx, smart_str(item), len(item))
   elif isinstance(item, unicode): raise NotImplementedError('todo: unicode')
   elif isinstance(item, bool):
     if item: cduk.duk_push_true(ctx)
@@ -175,11 +181,11 @@ cdef class DukContext:
     "key can be int (index lookup) or string (key lookup)"
     # todo: is int access necessary? should there be an array wrapper?
     if isinstance(arg,int): cduk.duk_get_prop_index(self.ctx, -1, arg)
-    elif isinstance(arg,str): cduk.duk_get_prop_string(self.ctx, -1, arg)
+    elif isinstance(arg,str): cduk.duk_get_prop_string(self.ctx, -1, smart_str(arg))
     else: raise TypeError('arg_type', type(arg))
   def set_prop(self, str prop):
     "sets obj[key]=thing if the end of the duktape stack is [obj,thing]"
-    cduk.duk_put_prop_string(self.ctx, -2, prop)
+    cduk.duk_put_prop_string(self.ctx, -2, smart_str(prop))
   def call_prop(self, str prop, tuple jsargs):
     "stack top should be a function. prop is the string name of the function. args must be a tuple, can be empty"
     old_top = len(self)
@@ -200,23 +206,23 @@ cdef class DukContext:
       cduk.duk_set_top(self.ctx, old_top)
       raise
     cduk.duk_new(self.ctx, len(args)) # todo: catchable new; I think duktape doesn't have it yet, stay alert
-  
+
   # eval
   def eval_file(self, str path):
     "leaves a return value on the top of the stack"
-    duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, path))
+    duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, smart_str(path)))
   def eval_string(self, basestring js):
     "leaves a return value on the top of the stack"
-    duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, js))
+    duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, smart_str(js)))
 
   # compile
   # todo below: I think compile *doesn't* leave a ret val on the stack. otherwise why is it different from eval_*?
   def compile_file(self, str path):
     "leaves a return value on the top of the stack"
-    duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, path))
+    duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, smart_str(path)))
   def compile_string(self, basestring js):
     "leaves a return value on the top of the stack"
-    duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, js))
+    duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, smart_str(js)))
 
   # push/pop
   def push(self, item):
@@ -243,8 +249,7 @@ cdef class DukContext:
   # globals
   def get_global(self, str name):
     "look something global up by name, drop it on the stack"
-    cduk.duk_get_global_string(self.ctx, name)
+    cduk.duk_get_global_string(self.ctx, smart_str(name))
   def set_global(self, str name):
     "set name globally to the thing at the top of the stack"
-    cduk.duk_put_global_string(self.ctx, name)
-
+    cduk.duk_put_global_string(self.ctx, smart_str(name))

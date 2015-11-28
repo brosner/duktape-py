@@ -10,9 +10,6 @@ duk_c=Extension(
   ]
 )
 
-if sys.version_info[0]!=2:
-  raise EnvironmentError('not tested on py3; remove this if you think it should work')
-
 setup(
   name='duktape',
   version='0.0.3',
