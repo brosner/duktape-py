@@ -41,7 +41,7 @@ cdef extern from "duktape_c/duktape.h":
 
   duk_bool_t duk_get_prop_string(duk_context *ctx, duk_idx_t obj_index, const char *key)
   duk_bool_t duk_get_prop_index(duk_context *ctx, duk_idx_t obj_index, duk_uarridx_t arr_index)
-  
+
   duk_bool_t duk_get_global_string(duk_context *ctx, const char *key)
   duk_bool_t duk_put_global_string(duk_context *ctx, const char *key)
 
@@ -68,15 +68,15 @@ cdef extern from "duktape_c/duktape.h":
   duk_bool_t duk_is_ecmascript_function(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_bound_function(duk_context *ctx, duk_idx_t index)
   duk_bool_t duk_is_thread(duk_context *ctx, duk_idx_t index)
-  
+
   duk_int_t duk_pcompile_file(duk_context* ctx, duk_uint_t flags, const char* path) # macro
   duk_int_t duk_pcompile_string(duk_context* ctx, duk_uint_t flags, const char* src) # macro
   duk_int_t duk_peval_file(duk_context* ctx, const char* path) # macro
   duk_int_t duk_peval_string(duk_context* ctx, const char* src) # macro
-  
+
   void duk_pop(duk_context *ctx)
   void duk_pop_n(duk_context *ctx, duk_idx_t count)
-  
+
   duk_idx_t duk_push_object(duk_context *ctx)
   duk_idx_t duk_push_array(duk_context *ctx)
   void duk_push_undefined(duk_context *ctx)
@@ -91,7 +91,7 @@ cdef extern from "duktape_c/duktape.h":
   duk_idx_t duk_push_c_function(duk_context *ctx, duk_c_function func, duk_idx_t nargs)
   void duk_push_pointer(duk_context *ctx, void *p)
   void duk_push_current_function(duk_context *ctx)
-  
+
   duk_bool_t duk_put_prop_string(duk_context *ctx, duk_idx_t obj_index, const char *key)
   duk_bool_t duk_put_prop_index(duk_context *ctx, duk_idx_t obj_index, duk_uarridx_t arr_index)
   const char* duk_safe_to_string(duk_context* ctx, duk_idx_t index) # macro
@@ -99,4 +99,5 @@ cdef extern from "duktape_c/duktape.h":
   duk_int_t duk_pcall(duk_context *ctx, duk_idx_t nargs)
   duk_int_t duk_pcall_method(duk_context *ctx, duk_idx_t nargs)
   duk_int_t duk_pcall_prop(duk_context *ctx, duk_idx_t obj_index, duk_idx_t nargs)
+  duk_int_t duk_pnew(duk_context *ctx, duk_idx_t nargs)
   void duk_new(duk_context *ctx, duk_idx_t nargs)

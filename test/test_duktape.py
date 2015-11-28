@@ -50,15 +50,10 @@ new C(1,1);"""
 
 def test_get_twice():
   "when I wrote this get() wasn't cleaning up after itself"
-  print("a")
   c=duktape.DukContext()
-  print("b")
   c.eval_string("function C(a,b){this.a=a; this.b=b;}")
-  print("c")
   c.get_global('C')
-  print("d")
   c.construct(1,[2,3])
-  print("e")
   assert len(c)==2
   assert c.get()=={'a':1.,'b':[2.,3.]}
   assert len(c)==2

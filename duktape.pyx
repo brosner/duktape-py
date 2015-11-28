@@ -205,7 +205,7 @@ cdef class DukContext:
     except TypeError:
       cduk.duk_set_top(self.ctx, old_top)
       raise
-    cduk.duk_new(self.ctx, len(args)) # todo: catchable new; I think duktape doesn't have it yet, stay alert
+    duk_reraise(self.ctx, cduk.duk_pnew(self.ctx, len(args)))
 
   # eval
   def eval_file(self, str path):
