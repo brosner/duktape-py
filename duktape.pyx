@@ -1,420 +1,247 @@
-"wrapper module for duktape"
-
 cimport cduk
 cimport cpython
 
-
-def force_unicode(b):
-    return b.decode("utf-8")
-
-
-def smart_str(s):
-    return s.encode("utf-8")
+import threading
+import sys
+from libc.stdio cimport printf
 
 
-class DuktapeError(Exception):
-
-    def __init__(self, name, message, file, line, stack):
-        self.name = name
-        self.message = message
-        self.file = file
-        self.line = line
-        self.stack = stack
-
-    def __str__(self):
-        return "[{} {}:{}] {}".format(
-            self.name,
-            self.file,
-            self.line,
-            self.message,
-        )
-
-    def __repr__(self):
-        return "<Duktape:{}>".format(str(self))
+cdef cduk.duk_int_t func_next_id = 1
 
 
-cdef getprop(cduk.duk_context *ctx, str prop):
-    """
-    get property from stack-top object, return as python string, leave stack clean
-    """
-    cduk.duk_get_prop_string(ctx, -1, smart_str(prop))
-    cdef const char *res = cduk.duk_safe_to_string(ctx, -1)
-    cduk.duk_pop(ctx)
-    return force_unicode(res)
-
-
-cdef duk_reraise(cduk.duk_context* ctx, int res):
-    """
-    for duktape meths that return nonzero to indicate trouble, convert the error object to python and raise it
-    """
-    if res:
-        err = DuktapeError(
-            *[
-                getprop(ctx, prop)
-                for prop in ("name", "message", "file", "line", "stack")
-            ]
-        )
-        cduk.duk_pop(ctx)
-        raise err
-
-
-class DukType:
-    """
-    wrapper for integer types that provide extra information
-    """
-    # todo: add flags for array, function
-    TYPES={
-        0: "missing",  # this means invalid stack index
-        1: "undefined",
-        2: type(None),  # null
-        3: bool,
-        4: float,
-        5: str,
-        6: object,
-    }
-
-    def __init__(self, type_int):
-        self.type_int = type_int
-
-    def type(self):
-        return self.TYPES.get(self.type_int)
-
-    @classmethod
-    def fromname(clas, name):
-        raise NotImplementedError
-
-    def __repr__(self):
-        return "<DukType {!i} {}>".format(self.type_int, self.type())
-
-
-# todo: think about using these (but make sure they evaluate to false)
-class DukNull: "not used yet"
-class DukUndefined: "not used yet"
-
-
-cdef class DukWrappedObject:
-    # todo: use this to wrap things that we don't know how to convert to a python object
+class Error(Exception):
     pass
 
 
-cdef unsigned int PY_DUK_COMPILE_ARGS = 0
+cdef force_unicode(b):
+    return b.decode("utf-8")
 
 
-cdef get_list(cduk.duk_context *ctx, index=-1):
-    """
-    helper for get_helper()
-    """
-    a = []
-    for i in range(cduk.duk_get_length(ctx, index)):
-        cduk.duk_get_prop_index(ctx, index, i) # this puts the elt on the stack
-        try:
-            a.append(get_helper(ctx, -1))
-        finally:
+cdef smart_str(s):
+    return s.encode("utf-8")
+
+
+cdef duk_reraise(cduk.duk_context *ctx, cduk.duk_int_t rc):
+    if rc:
+        if cduk.duk_is_error(ctx, -1):
+            cduk.duk_get_prop_string(ctx, -1, "stack")
+            stack_trace = cduk.duk_safe_to_string(ctx, -1)
             cduk.duk_pop(ctx)
-    return a
+            raise Error(force_unicode(stack_trace))
+        else:
+            raise Error(force_unicode(cduk.duk_safe_to_string(ctx, -1)))
 
 
-cdef get_dict(cduk.duk_context *ctx, index=-1):
-    """
-    helper for get_helper()
-    """
-    d = {}
-    cduk.duk_enum(ctx, index, cduk.DUK_ENUM_OWN_PROPERTIES_ONLY)
-    try:
-        while cduk.duk_next(ctx, index, True):  # this pushes k & v onto the stack
-            try:
-                d[get_helper(ctx, -2)] = get_helper(ctx, -1)
-            finally:
-                cduk.duk_pop_n(ctx, 2)
-    finally:
-        cduk.duk_pop_n(ctx, 1)  # pop the enum
-    return d
+class PyFunc:
+
+    def __init__(self, func, nargs):
+        self.func = func
+        self.nargs = nargs
 
 
-cdef get_string(cduk.duk_context *ctx, index=-1):
-    """
-    helper for get_helper()
-    """
+cdef cduk.duk_ret_t duk__print(cduk.duk_context *ctx):
+    cduk.duk_push_string(ctx, " ")
+    cduk.duk_insert(ctx, 0)
+    cduk.duk_join(ctx, cduk.duk_get_top(ctx) - 1)
+    print(force_unicode(cduk.duk_safe_to_string(ctx, -1)))
+    return 0
+
+
+cdef to_python_string(cduk.duk_context *ctx, cduk.duk_idx_t idx):
     cdef cduk.duk_size_t strlen
-    cdef const char *buf = cduk.duk_get_lstring(ctx, index, &strlen)
-    return force_unicode(buf[:strlen])  # docs claim this allows nulls http://docs.cython.org/src/tutorial/strings.html#passing-byte-strings
+    cdef const char *buf = cduk.duk_get_lstring(ctx, idx, &strlen)
+    return force_unicode(buf[:strlen])
 
 
-cdef get_helper(cduk.duk_context *ctx, index=-1):
-    if cduk.duk_is_boolean(ctx, index):
-        return bool(cduk.duk_get_boolean(ctx, index))
-    elif cduk.duk_is_nan(ctx, index):
-        return float('nan')
-    elif cduk.duk_is_null_or_undefined(ctx, index):
-        return None  # todo: see DukNull etc above
-    elif cduk.duk_is_number(ctx, index):
-        return cduk.duk_get_number(ctx, index)  # todo: is there an internal int value? if yes test for that
-    elif cduk.duk_is_string(ctx, index):
-        return get_string(ctx, index)
-    elif cduk.duk_is_array(ctx, index):
-        return get_list(ctx, index)
-    elif cduk.duk_is_object(ctx, index):
-        return get_dict(ctx, index)  # note: I think this ends up being a catch-all. yuck.
-    else:
-        raise TypeError("not_coercible", DukType(cduk.duk_get_type(ctx, index)))  # todo: return a wrapper instead. also, this never triggers because of the is_object test above
-
-
-cdef push_dict(cduk.duk_context *ctx, d):
-    """
-    helper for push
-    """
-    cduk.duk_push_object(ctx)
-    try:
-        for k, v in d.items():
-            if not isinstance(k, str):
-                raise TypeError("k_not_str", type(k))
-            push_helper(ctx,v)
-            cduk.duk_put_prop_string(ctx, -2, smart_str(k))
-    except TypeError:
+cdef to_python_list(cduk.duk_context *ctx, cduk.duk_idx_t idx):
+    ret = []
+    for i in range(cduk.duk_get_length(ctx, idx)):
+        cduk.duk_get_prop_index(ctx, idx, i)
+        ret.append(to_python(ctx, -1))
         cduk.duk_pop(ctx)
-        raise
+    return ret
 
 
-cdef push_array(cduk.duk_context *ctx, a):
-    """
-    helper for push
-    """
+cdef to_python_dict(cduk.duk_context *ctx, cduk.duk_idx_t idx):
+    ret = {}
+    cduk.duk_enum(ctx, idx, cduk.DUK_ENUM_OWN_PROPERTIES_ONLY)
+    while cduk.duk_next(ctx, idx, 1):
+        ret[to_python(ctx, -2)] = to_python(ctx, -1)
+        cduk.duk_pop_n(ctx, 2)
+    cduk.duk_pop_n(ctx, 1)
+    return ret
+
+
+cdef to_python_func(cduk.duk_context *ctx, cduk.duk_idx_t idx):
+    global func_next_id
+
+    cdef cduk.duk_int_t func_id = func_next_id
+    func_next_id += 1
+
+    fidx = cduk.duk_normalize_index(ctx, idx)
+
+    cduk.duk_push_global_stash(ctx)  # [ ... stash ]
+    cduk.duk_get_prop_string(ctx, -1, "funcs")  # [ ... stash funcs ]
+    cduk.duk_push_int(ctx, func_id)  # [ ... stash funcs id ]
+    cduk.duk_dup(ctx, fidx)  # [ ... stash funcs id func ]
+    cduk.duk_put_prop(ctx, -3)  # [ ... stash funcs ]
+    cduk.duk_pop_n(ctx, 2)
+
+    f = Func()
+    f.ctx = ctx
+    f.func_id = func_id
+    return f
+
+
+cdef class Func:
+
+    cdef cduk.duk_context *ctx
+    cdef cduk.duk_int_t func_id
+
+    def __call__(self, *args):
+        ctx = self.ctx
+        cduk.duk_push_global_stash(ctx)  # -> [ ... stash ]
+        cduk.duk_get_prop_string(ctx, -1, "funcs")  # -> [ ... stash funcs ]
+        cduk.duk_push_int(ctx, self.func_id)  # -> [ ... stash funcs func_id ]
+        cduk.duk_get_prop(ctx, -2)  # -> [ ... stash funcs func ]
+        for arg in args:
+            to_js(ctx, arg)
+        duk_reraise(ctx, cduk.duk_pcall(ctx, len(args)))  # -> [ ... stash funcs retval ]
+        ret = to_python(ctx, -1)
+        cduk.duk_pop_n(ctx, 3)
+        return ret
+
+
+cdef to_python(cduk.duk_context *ctx, cduk.duk_idx_t idx):
+    if cduk.duk_is_boolean(ctx, idx):
+        return bool(cduk.duk_get_boolean(ctx, idx))
+    elif cduk.duk_is_nan(ctx, idx):
+        return float("nan")
+    elif cduk.duk_is_null_or_undefined(ctx, idx):
+        return None
+    elif cduk.duk_is_number(ctx, idx):
+        return float(cduk.duk_get_number(ctx, idx))
+    elif cduk.duk_is_string(ctx, idx):
+        return to_python_string(ctx, idx)
+    elif cduk.duk_is_array(ctx, idx):
+        return to_python_list(ctx, idx)
+    elif cduk.duk_is_function(ctx, idx):
+        return to_python_func(ctx, idx)
+    elif cduk.duk_is_object(ctx, idx):
+        return to_python_dict(ctx, idx)
+    else:
+        return 'unknown'
+        # raise TypeError("not_coercible", cduk.duk_get_type(ctx, idx))
+
+
+cdef cduk.duk_ret_t js_func_wrapper(cduk.duk_context *ctx):
+    # [ args... ]
+    cdef cduk.duk_int_t nargs
+    cdef void *ptr
+
+    cduk.duk_push_current_function(ctx)
+
+    cduk.duk_get_prop_string(ctx, -1, "__duktape_cfunc_nargs__")
+    nargs = cduk.duk_require_int(ctx, -1)
+    cduk.duk_pop(ctx)
+
+    cduk.duk_get_prop_string(ctx, -1, "__duktape_cfunc_pointer__")
+    ptr = cduk.duk_require_pointer(ctx, -1)
+    func = <object>ptr
+    cduk.duk_pop(ctx)
+
+    cduk.duk_pop(ctx)
+
+    args = [to_python(ctx, idx) for idx in range(nargs)]
+    to_js(ctx, func(*args))
+    return 1
+
+
+cdef cduk.duk_ret_t js_func_finalizer(cduk.duk_context *ctx):
+    ptr = cduk.duk_get_heapptr(ctx, -1)
+    func = <object>ptr
+    cpython.Py_DECREF(func)
+    return 0
+
+
+cdef to_js_func(cduk.duk_context *ctx, pyfunc):
+    func, nargs = pyfunc.func, pyfunc.nargs
+    cpython.Py_INCREF(func)
+    cduk.duk_push_c_function(ctx, js_func_wrapper, -1)  # [ ... js_func_wrapper ]
+    cduk.duk_push_c_function(ctx, js_func_finalizer, -1)  # [ ... js_func_wrapper js_func_finalizer ]
+    cduk.duk_set_finalizer(ctx, -2)  # [ ... js_func_wrapper ]
+    cduk.duk_push_pointer(ctx, <void*>func)  # [ ... js_func_wrapper func ]
+    cduk.duk_put_prop_string(ctx, -2, "__duktape_cfunc_pointer__")  # [ ... js_func_wrapper ]
+    cduk.duk_push_number(ctx, nargs)  # [ ... js_func_wrapper nargs ]
+    cduk.duk_put_prop_string(ctx, -2, "__duktape_cfunc_nargs__")   # [ ... js_func_wrapper ]
+
+
+cdef to_js_array(cduk.duk_context *ctx, lst):
     cduk.duk_push_array(ctx)
-    try:
-        for i, x in enumerate(a):
-            push_helper(ctx, x)
-            cduk.duk_put_prop_index(ctx, -2, i)
-    except TypeError:
-        cduk.duk_pop(ctx)  # cleanup
-        raise
+    for i, value in enumerate(lst):
+        to_js(ctx, value)
+        cduk.duk_put_prop_index(ctx, -2, i)
 
 
-cdef push_helper(cduk.duk_context *ctx, item):
-    if isinstance(item, str):
-        cduk.duk_push_lstring(ctx, smart_str(item), len(item))
-    elif isinstance(item, unicode):
-        raise NotImplementedError("todo: unicode")
-    elif isinstance(item, bool):
-        if item:
+cdef to_js_dict(cduk.duk_context *ctx, dct):
+    cduk.duk_push_object(ctx)
+    for key, value in dct.items():
+        to_js(ctx, value)
+        cduk.duk_put_prop_string(ctx, -2, smart_str(key))
+
+
+cdef to_js(cduk.duk_context *ctx, value):
+    if value is None:
+        cduk.duk_push_null(ctx)
+    elif isinstance(value, str):
+        cduk.duk_push_lstring(ctx, smart_str(value), len(value))
+    elif isinstance(value, bool):
+        if value:
             cduk.duk_push_true(ctx)
         else:
             cduk.duk_push_false(ctx)
-    elif isinstance(item, (int, float)):
-        cduk.duk_push_number(ctx, <double>item)  # todo: separate ints
-    elif isinstance(item, (list, tuple)):
-        push_array(ctx, item)
-    elif isinstance(item, dict):
-        push_dict(ctx, item)
-    elif item is None:
-        cduk.duk_push_null(ctx)
-    else:
-        raise TypeError("cant_coerce_type", type(item))
+    elif isinstance(value, (list, tuple)):
+        to_js_array(ctx, value)
+    elif isinstance(value, PyFunc):
+        to_js_func(ctx, value)
+    elif isinstance(value, dict):
+        to_js_dict(ctx, value)
 
 
-cdef const char* PYDUK_FP="__duktape_cfunc_pointer__"
-cdef const char* PYDUK_NARGS="__duktape_cfunc_nargs__"
-
-
-cdef cduk.duk_ret_t callback_wrapper(cduk.duk_context* ctx):
-    """
-    this is used in push_func. it's the c function pointer that wraps the duktape external function callback
-    """
-    cduk.duk_push_current_function(ctx)
-    # warning: this section dangerously assumes that the props (PDUK_FP and _NARGS) haven't been modified
-    cduk.duk_get_prop_string(ctx, -1, PYDUK_FP)
-    func = <object>cduk.duk_get_pointer(ctx, -1)
-    cpython.Py_INCREF(func)  # warning: this never gets cleaned. does duktape have a global transformation callback that can be hooked?
-    if not callable(func):
-        return cduk.DUK_RET_TYPE_ERROR
-    cduk.duk_pop(ctx)  # pop the pointer
-    cduk.duk_get_prop_string(ctx, -1, PYDUK_NARGS)
-    nargs = cduk.duk_get_int(ctx, -1)
-    cduk.duk_pop_n(ctx, 2)  # pop nargs and current_function
-    if nargs == cduk.DUK_VARARGS:
-        nargs = cduk.duk_get_top(ctx)  # this works because the function is called inside a dedicated stack
-    elif nargs < 0:
-        return cduk.DUK_RET_RANGE_ERROR  # DukContext.push_func protects from this unless someone was tinkering
-    args_tuple = tuple([get_helper(ctx, i) for i in range(nargs)])  # for some reason, taking the inner list out here breaks compilation
-    cdef object retval = cpython.PyObject_Call(<object>func, args_tuple, <object>NULL)
-    push_helper(ctx, retval)
-    return 1  # todo: DUK_EXEC_SUCCESS=0. is this DUK_EXEC_ERROR? or the number of args returned, maybe. link to docs.
-
-
-cdef class DukContext:
+cdef class Context:
 
     cdef cduk.duk_context *ctx
 
     def __cinit__(self):
         self.ctx = cduk.duk_create_heap_default()
+        self.setup()
 
     def __dealloc__(self):
         if self.ctx:
             cduk.duk_destroy_heap(self.ctx)
             self.ctx = NULL
 
-    def gc(self):
-        """
-        run garbage collector
-        """
-        cduk.duk_gc(self.ctx, 0)
+    def setup(self):
+        cduk.duk_push_global_stash(self.ctx)
+        cduk.duk_push_object(self.ctx)
+        cduk.duk_put_prop_string(self.ctx, -2, "funcs")
+        cduk.duk_pop(self.ctx)
 
-    def __len__(self):
-        """
-        calls duk_get_top, which is confusingly named. the *index* of the top item is len(stack)-1 (or just -1)
-        """
-        return cduk.duk_get_top(self.ctx)
+        cduk.duk_push_global_object(self.ctx)
+        cduk.duk_put_global_string(self.ctx, "global")
 
-    def get_type(self, index=-1):
-        """
-        type of value (as DukType) at index (pass -1 for top)
-        """
-        return DukType(cduk.duk_get_type(self.ctx, index))
+        cduk.duk_push_c_function(self.ctx, duk__print, -1)
+        cduk.duk_put_global_string(self.ctx, "print")
 
-    def get(self, index=-1):
-        """
-        get whatever's at the top of the stack and return to python. fail if stack empty or object is not coercible/wrappable.
-        """
-        return get_helper(self.ctx, index)
+    def __setitem__(self, key, value):
+        to_js(self.ctx, value)
+        cduk.duk_put_global_string(self.ctx, smart_str(key))
 
-    def call(self, *args):
-        """
-        stack top object must be callable. see also call_prop
-        """
-        if not cduk.duk_is_callable(self.ctx, -1):
-            raise TypeError("stack_top:not_callable")
-        top = len(self)
-        try:
-            list(map(self.push, args))
-        except TypeError:
-            cduk.duk_set_top(self.ctx, top)
-            raise
-        # todo: make sure it cleans the stack in error case
-        duk_reraise(self.ctx, cduk.duk_pcall(self.ctx, len(args)))
+    def __getitem__(self, key):
+        cduk.duk_get_global_string(self.ctx, smart_str(key))
+        return to_python(self.ctx, -1)
 
-    def tostring(self, index=-1):
-        """
-        return a string representation of the stack top object
-        """
-        return cduk.duk_safe_to_string(self.ctx, index)
-
-    # object property manipulators
-    def get_prop(self, arg):
-        """
-        key can be int (index lookup) or string (key lookup)
-        """
-        # todo: is int access necessary? should there be an array wrapper?
-        if isinstance(arg, int):
-            cduk.duk_get_prop_index(self.ctx, -1, arg)
-        elif isinstance(arg, str):
-            cduk.duk_get_prop_string(self.ctx, -1, smart_str(arg))
-        else:
-            raise TypeError("arg_type", type(arg))
-
-    def set_prop(self, str prop):
-        """
-        sets obj[key] = thing if the end of the duktape stack is [obj, thing]
-        """
-        cduk.duk_put_prop_string(self.ctx, -2, smart_str(prop))
-
-    def call_prop(self, str prop, tuple jsargs):
-        """
-        stack top should be a function. prop is the string name of the function. args must be a tuple, can be empty
-        """
-        old_top = len(self)
-        try:
-            self.push(prop)
-            list(map(self.push,jsargs))
-        except TypeError:
-            cduk.duk_set_top(self.ctx, old_top)
-            raise
-        # todo: I'm assuming that it cleans the stack in case of an error. instead of assuming, test.
-        duk_reraise(self.ctx, cduk.duk_pcall_prop(self.ctx, old_top-1, len(jsargs)))
-
-    def construct(self, *args):
-        """
-        the type you're making (i.e. its constructor function) should be stack-top.
-        """
-        old_top = len(self)
-        if not cduk.duk_is_function(self.ctx, -1): raise TypeError('not_function')
-        try: list(map(self.push, args))
-        except TypeError:
-            cduk.duk_set_top(self.ctx, old_top)
-            raise
-        duk_reraise(self.ctx, cduk.duk_pnew(self.ctx, len(args)))
-
-    # eval
-    def eval_file(self, str path):
-        """
-        leaves a return value on the top of the stack
-        """
-        duk_reraise(self.ctx, cduk.duk_peval_file(self.ctx, smart_str(path)))
-
-    def eval_string(self, basestring js):
-        """
-        leaves a return value on the top of the stack
-        """
-        duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, smart_str(js)))
-
-
-    # compile
-    # todo below: I think compile *doesn't* leave a ret val on the stack. otherwise why is it different from eval_*?
-    def compile_file(self, str path):
-        """
-        leaves a return value on the top of the stack
-        """
-        duk_reraise(self.ctx, cduk.duk_pcompile_file(self.ctx, PY_DUK_COMPILE_ARGS, smart_str(path)))
-
-    def compile_string(self, basestring js):
-        """
-        leaves a return value on the top of the stack
-        """
-        duk_reraise(self.ctx, cduk.duk_pcompile_string(self.ctx, PY_DUK_COMPILE_ARGS, smart_str(js)))
-
-    # push/pop
-    def push(self, item):
-        """
-        push python object to JS stack. TypeError if it's something we don't handle
-        """
-        push_helper(self.ctx, item)
-
-    def push_undefined(self):
-        """
-        necessary because None gets coerced to null
-        """
-        cduk.duk_push_undefined(self.ctx)
-
-    def push_func(self, f, nargs):
-        """
-        nargs -1 for varargs. WARNING this leaks memory (the function is INCREF'd forever)
-        """
-        if not callable(f):
-            raise TypeError
-        if not isinstance(nargs, int):
-            raise TypeError
-        if nargs < 0 and nargs != -1:
-            raise ValueError("-1 is varargs, no other negatives allowed")
-        cpython.Py_INCREF(f)  # warning: this is a memory leak. look in duktape docs for gc triggers
-        cduk.duk_push_c_function(self.ctx, callback_wrapper, nargs)
-        cduk.duk_push_pointer(self.ctx, <void*>f)
-        cduk.duk_put_prop_string(self.ctx, -2, PYDUK_FP)
-        self.push(nargs)
-        cduk.duk_put_prop_string(self.ctx, -2, PYDUK_NARGS)
-
-    def pop(self, n=1):
-        """
-        pop N elts from the stack. doesn't return them, just removes them
-        """
-        cduk.duk_pop_n(self.ctx, n)
-
-    # globals
-    def get_global(self, str name):
-        """
-        look something global up by name, drop it on the stack
-        """
-        cduk.duk_get_global_string(self.ctx, smart_str(name))
-
-    def set_global(self, str name):
-        """
-        set name globally to the thing at the top of the stack
-        """
-        cduk.duk_put_global_string(self.ctx, smart_str(name))
+    def execute(self, filename):
+        cduk.fileio_push_file_string(self.ctx, smart_str(filename))
+        duk_reraise(self.ctx, cduk.duk_peval(self.ctx))
+        return force_unicode(cduk.duk_safe_to_string(self.ctx, -1))
