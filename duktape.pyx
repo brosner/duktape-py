@@ -6,7 +6,7 @@ import sys
 from libc.stdio cimport printf
 
 
-cdef cduk.duk_int_t func_next_id = 1
+cdef cduk.duk_int_t _ref_map_next_id = 1
 
 
 class Error(Exception):
@@ -39,14 +39,6 @@ class PyFunc:
         self.nargs = nargs
 
 
-cdef cduk.duk_ret_t duk__print(cduk.duk_context *ctx):
-    cduk.duk_push_string(ctx, " ")
-    cduk.duk_insert(ctx, 0)
-    cduk.duk_join(ctx, cduk.duk_get_top(ctx) - 1)
-    print(force_unicode(cduk.duk_safe_to_string(ctx, -1)))
-    return 0
-
-
 cdef to_python_string(cduk.duk_context *ctx, cduk.duk_idx_t idx):
     cdef cduk.duk_size_t strlen
     cdef const char *buf = cduk.duk_get_lstring(ctx, idx, &strlen)
@@ -73,40 +65,40 @@ cdef to_python_dict(cduk.duk_context *ctx, cduk.duk_idx_t idx):
 
 
 cdef to_python_func(cduk.duk_context *ctx, cduk.duk_idx_t idx):
-    global func_next_id
+    global _ref_map_next_id
 
-    cdef cduk.duk_int_t func_id = func_next_id
-    func_next_id += 1
+    cdef cduk.duk_int_t _ref_id = _ref_map_next_id
+    _ref_map_next_id += 1
 
     fidx = cduk.duk_normalize_index(ctx, idx)
 
     cduk.duk_push_global_stash(ctx)  # [ ... stash ]
-    cduk.duk_get_prop_string(ctx, -1, "funcs")  # [ ... stash funcs ]
-    cduk.duk_push_int(ctx, func_id)  # [ ... stash funcs id ]
-    cduk.duk_dup(ctx, fidx)  # [ ... stash funcs id func ]
-    cduk.duk_put_prop(ctx, -3)  # [ ... stash funcs ]
+    cduk.duk_get_prop_string(ctx, -1, "_ref_map")  # [ ... stash _ref_map ]
+    cduk.duk_push_int(ctx, _ref_id)  # [ ... stash _ref_map id ]
+    cduk.duk_dup(ctx, fidx)  # [ ... stash _ref_map id func ]
+    cduk.duk_put_prop(ctx, -3)  # [ ... stash _ref_map ]
     cduk.duk_pop_n(ctx, 2)
 
     f = Func()
     f.ctx = ctx
-    f.func_id = func_id
+    f._ref_id = _ref_id
     return f
 
 
 cdef class Func:
 
     cdef cduk.duk_context *ctx
-    cdef cduk.duk_int_t func_id
+    cdef cduk.duk_int_t _ref_id
 
     def __call__(self, *args):
         ctx = self.ctx
         cduk.duk_push_global_stash(ctx)  # -> [ ... stash ]
-        cduk.duk_get_prop_string(ctx, -1, "funcs")  # -> [ ... stash funcs ]
-        cduk.duk_push_int(ctx, self.func_id)  # -> [ ... stash funcs func_id ]
-        cduk.duk_get_prop(ctx, -2)  # -> [ ... stash funcs func ]
+        cduk.duk_get_prop_string(ctx, -1, "_ref_map")  # -> [ ... stash _ref_map ]
+        cduk.duk_push_int(ctx, self._ref_id)  # -> [ ... stash _ref_map _ref_id ]
+        cduk.duk_get_prop(ctx, -2)  # -> [ ... stash _ref_map func ]
         for arg in args:
             to_js(ctx, arg)
-        duk_reraise(ctx, cduk.duk_pcall(ctx, len(args)))  # -> [ ... stash funcs retval ]
+        duk_reraise(ctx, cduk.duk_pcall(ctx, len(args)))  # -> [ ... stash _ref_map retval ]
         ret = to_python(ctx, -1)
         cduk.duk_pop_n(ctx, 3)
         return ret
@@ -224,14 +216,8 @@ cdef class Context:
     def setup(self):
         cduk.duk_push_global_stash(self.ctx)
         cduk.duk_push_object(self.ctx)
-        cduk.duk_put_prop_string(self.ctx, -2, "funcs")
+        cduk.duk_put_prop_string(self.ctx, -2, "_ref_map")
         cduk.duk_pop(self.ctx)
-
-        cduk.duk_push_global_object(self.ctx)
-        cduk.duk_put_global_string(self.ctx, "global")
-
-        cduk.duk_push_c_function(self.ctx, duk__print, -1)
-        cduk.duk_put_global_string(self.ctx, "print")
 
     def __setitem__(self, key, value):
         to_js(self.ctx, value)
