@@ -230,4 +230,4 @@ cdef class Context:
     def execute(self, filename):
         cduk.fileio_push_file_string(self.ctx, smart_str(filename))
         duk_reraise(self.ctx, cduk.duk_peval(self.ctx))
-        return force_unicode(cduk.duk_safe_to_string(self.ctx, -1))
+        return to_python(self.ctx, -1)

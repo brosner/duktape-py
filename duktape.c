@@ -4347,7 +4347,6 @@ static PyObject *__pyx_pf_7duktape_7Context_10execute(struct __pyx_obj_7duktape_
   __Pyx_RefNannyDeclarations
   PyObject *__pyx_t_1 = NULL;
   char const *__pyx_t_2;
-  PyObject *__pyx_t_3 = NULL;
   __Pyx_RefNannySetupContext("execute", 0);
 
   /* "duktape.pyx":231
@@ -4355,7 +4354,7 @@ static PyObject *__pyx_pf_7duktape_7Context_10execute(struct __pyx_obj_7duktape_
  *     def execute(self, filename):
  *         cduk.fileio_push_file_string(self.ctx, smart_str(filename))             # <<<<<<<<<<<<<<
  *         duk_reraise(self.ctx, cduk.duk_peval(self.ctx))
- *         return force_unicode(cduk.duk_safe_to_string(self.ctx, -1))
+ *         return to_python(self.ctx, -1)
  */
   __pyx_t_1 = __pyx_f_7duktape_smart_str(__pyx_v_filename); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 231, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
@@ -4367,7 +4366,7 @@ static PyObject *__pyx_pf_7duktape_7Context_10execute(struct __pyx_obj_7duktape_
  *     def execute(self, filename):
  *         cduk.fileio_push_file_string(self.ctx, smart_str(filename))
  *         duk_reraise(self.ctx, cduk.duk_peval(self.ctx))             # <<<<<<<<<<<<<<
- *         return force_unicode(cduk.duk_safe_to_string(self.ctx, -1))
+ *         return to_python(self.ctx, -1)
  */
   __pyx_t_1 = __pyx_f_7duktape_duk_reraise(__pyx_v_self->ctx, duk_peval(__pyx_v_self->ctx)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 232, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
@@ -4376,16 +4375,13 @@ static PyObject *__pyx_pf_7duktape_7Context_10execute(struct __pyx_obj_7duktape_
   /* "duktape.pyx":233
  *         cduk.fileio_push_file_string(self.ctx, smart_str(filename))
  *         duk_reraise(self.ctx, cduk.duk_peval(self.ctx))
- *         return force_unicode(cduk.duk_safe_to_string(self.ctx, -1))             # <<<<<<<<<<<<<<
+ *         return to_python(self.ctx, -1)             # <<<<<<<<<<<<<<
  */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyBytes_FromString(duk_safe_to_string(__pyx_v_self->ctx, -1)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 233, __pyx_L1_error)
+  __pyx_t_1 = __pyx_f_7duktape_to_python(__pyx_v_self->ctx, -1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 233, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
-  __pyx_t_3 = __pyx_f_7duktape_force_unicode(__pyx_t_1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 233, __pyx_L1_error)
-  __Pyx_GOTREF(__pyx_t_3);
-  __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-  __pyx_r = __pyx_t_3;
-  __pyx_t_3 = 0;
+  __pyx_r = __pyx_t_1;
+  __pyx_t_1 = 0;
   goto __pyx_L0;
 
   /* "duktape.pyx":230
@@ -4399,7 +4395,6 @@ static PyObject *__pyx_pf_7duktape_7Context_10execute(struct __pyx_obj_7duktape_
   /* function exit code */
   __pyx_L1_error:;
   __Pyx_XDECREF(__pyx_t_1);
-  __Pyx_XDECREF(__pyx_t_3);
   __Pyx_AddTraceback("duktape.Context.execute", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __pyx_r = NULL;
   __pyx_L0:;
