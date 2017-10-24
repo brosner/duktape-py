@@ -192,12 +192,36 @@ cdef to_js(cduk.duk_context *ctx, value):
             cduk.duk_push_true(ctx)
         else:
             cduk.duk_push_false(ctx)
+    elif isinstance(value, (int, float)):
+        cduk.duk_push_int(ctx, value)
     elif isinstance(value, (list, tuple)):
         to_js_array(ctx, value)
     elif isinstance(value, PyFunc):
         to_js_func(ctx, value)
     elif isinstance(value, dict):
         to_js_dict(ctx, value)
+
+
+class Type:
+
+    mapping = {
+        cduk.DUK_TYPE_NONE: "missing",
+        cduk.DUK_TYPE_UNDEFINED: "undefined",
+        cduk.DUK_TYPE_NULL: type(None),
+        cduk.DUK_TYPE_BOOLEAN: bool,
+        cduk.DUK_TYPE_NUMBER: float,
+        cduk.DUK_TYPE_STRING: str,
+        cduk.DUK_TYPE_OBJECT: object,
+    }
+
+    def __init__(self, value):
+        self.value = value
+
+    def as_pytype(self):
+        return self.mapping[self.value]
+
+    def __repr__(self):
+        return "<duktape.Type {0} {1}>".format(self.value, self.as_pytype())
 
 
 cdef class Context:
@@ -227,7 +251,26 @@ cdef class Context:
         cduk.duk_get_global_string(self.ctx, smart_str(key))
         return to_python(self.ctx, -1)
 
-    def execute(self, filename):
+    def __len__(self):
+        return cduk.duk_get_top(self.ctx)
+
+    def load(self, filename):
         cduk.fileio_push_file_string(self.ctx, smart_str(filename))
         duk_reraise(self.ctx, cduk.duk_peval(self.ctx))
         return to_python(self.ctx, -1)
+
+    def loads(self, js):
+        duk_reraise(self.ctx, cduk.duk_peval_string(self.ctx, smart_str(js)))
+        return to_python(self.ctx, -1)
+
+    def gc(self):
+        cduk.duk_gc(self.ctx, 0)
+
+    def _get(self):
+        return to_python(self.ctx, -1)
+
+    def _push(self, value):
+        to_js(self.ctx, value)
+
+    def _type(self, idx=-1):
+        return Type(cduk.duk_get_type(self.ctx, idx))

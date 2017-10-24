@@ -23,6 +23,14 @@ cdef extern from "duktape_c/duktape.h":
         duk_c_function value
         duk_idx_t nargs
 
+    unsigned int DUK_TYPE_NONE
+    unsigned int DUK_TYPE_UNDEFINED
+    unsigned int DUK_TYPE_NULL
+    unsigned int DUK_TYPE_BOOLEAN
+    unsigned int DUK_TYPE_NUMBER
+    unsigned int DUK_TYPE_STRING
+    unsigned int DUK_TYPE_OBJECT
+
     unsigned int DUK_ENUM_OWN_PROPERTIES_ONLY
 
     void duk_concat(duk_context *ctx, duk_idx_t count)
@@ -31,6 +39,7 @@ cdef extern from "duktape_c/duktape.h":
     void duk_destroy_heap(duk_context* ctx)
     void duk_dup(duk_context *ctx, duk_idx_t from_idx)
     void duk_enum(duk_context *ctx, duk_idx_t obj_idx, duk_uint_t enum_flags)
+    void duk_gc(duk_context *ctx, duk_uint_t flags)
     duk_bool_t duk_get_boolean(duk_context *ctx, duk_idx_t idx)
     duk_context *duk_get_context(duk_context *ctx, duk_idx_t idx)
     duk_bool_t duk_get_global_string(duk_context *ctx, const char *key)
@@ -59,6 +68,7 @@ cdef extern from "duktape_c/duktape.h":
     duk_int_t duk_pcall(duk_context *ctx, duk_idx_t nargs)
     duk_int_t duk_pcompile(duk_context *ctx, duk_uint_t flags) # macro
     duk_int_t duk_peval(duk_context *ctx) # macro
+    duk_int_t duk_peval_string(duk_context *ctx, const char *src)
     void duk_pop(duk_context *ctx)
     void duk_pop_n(duk_context *ctx, duk_idx_t count)
     duk_idx_t duk_push_array(duk_context *ctx)
